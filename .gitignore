@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 数据集与模型权重体积巨大，不入库
+data/raw/
+data/train/
+data/eval/
+data/calib*.jsonl
+outputs/
+saves/
+*.safetensors
+*.bin
+*.pt
+
+results/*.json
+results/_variant_status.tsv
+logs/
+*.log
+
+# 测试产物
+_test_out.txt
+
+.idea/
+.vscode/
+.DS_Store
+_check*.txt

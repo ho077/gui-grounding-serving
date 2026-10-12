@@ -1,0 +1,24 @@
+# 训练 / 量化 / 部署侧依赖（云端 3090 用）
+#
+# 安装顺序建议：先装带 CUDA 的 torch，再装其余，避免 pip 把 CPU 版 torch 拉进来。
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r requirements-train.txt
+
+torch>=2.4
+torchvision>=0.19
+transformers>=4.51
+datasets>=2.19
+accelerate>=0.30
+peft>=0.11
+trl>=0.9
+deepspeed>=0.14
+
+# 量化：vLLM 团队维护，对新模型跟进快，输出 compressed-tensors 原生兼容 vLLM
+llmcompressor>=0.4
+
+# 推理服务
+vllm>=0.9
+
+# 微调框架（单独 clone，不在 pip 里）
+# git clone https://github.com/hiyouga/LLaMA-Factory.git
+# cd LLaMA-Factory && pip install -e ".[torch,metrics]"

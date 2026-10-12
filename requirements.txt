@@ -1,0 +1,8 @@
+# 评测与压测侧依赖（不含训练，训练见 requirements-train.txt）
+aiohttp>=3.9
+PyYAML>=6.0
+Pillow>=10.0
+numpy>=1.24
+requests>=2.31
+nvidia-ml-py>=12.0
+huggingface_hub>=0.23

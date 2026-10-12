@@ -1,0 +1,18 @@
+# BF16 基线 —— 所有档位的精度损失都拿它当分母
+#
+# GUI grounding 是单图短输出任务：输入一张截图，输出一个坐标 JSON。
+# 因此 limit_mm_per_prompt 锁死 1 张图，max_model_len 也不需要大。
+model: outputs/qwen25vl-3b-gui-sft-merged
+served_model_name: qwen25vl-3b-gui-bf16
+dtype: bfloat16
+quantization: null
+
+max_model_len: 4096
+gpu_memory_utilization: 0.90
+limit_mm_per_prompt: '{"image":1,"video":0}'
+# 【方法论】官方 recipe 要求 benchmark 期间关闭 prefix caching。
+# 不关的话重复截图第二次几乎零 prefill，TTFT 好看到失真，档位间不可比。
+enable_prefix_caching: false
+enforce_eager: false
+
+port: 8000

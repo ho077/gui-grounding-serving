@@ -1,0 +1,17 @@
+# AWQ W4A16 —— 3090 上唯一可用的低比特档位
+#
+# 3090 是 Ampere SM 8.6，没有 FP8 支持（需 8.9+），所以 INT4 是唯一的压缩出路。
+# 量化输入必须是**合并后的完整模型**，不能拿 QLoRA adapter 直接量化
+# （会报 dtype 不匹配，这是 VLM 部署最常见的卡点）。
+model: outputs/qwen25vl-3b-gui-sft-merged-awq
+served_model_name: qwen25vl-3b-gui-awq
+dtype: bfloat16
+quantization: awq
+
+max_model_len: 4096
+gpu_memory_utilization: 0.90
+limit_mm_per_prompt: '{"image":1,"video":0}'
+enable_prefix_caching: false
+enforce_eager: false
+
+port: 8000

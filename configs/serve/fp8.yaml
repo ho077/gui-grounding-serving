@@ -1,0 +1,17 @@
+# FP8 —— 仅在 Ada (SM 8.9+) / Blackwell 上可用
+#
+# 3090 属 Ampere SM 8.6，**不支持 FP8**。
+# 本配置保留是为了在 4090 / 50xx 上跑出对照数据；
+# 在 3090 上会被 src/vfs/hardware.py 自动判为 SKIP 并给出原因，不会浪费加载时间。
+model: outputs/qwen25vl-3b-gui-sft-merged-fp8
+served_model_name: qwen25vl-3b-gui-fp8
+dtype: auto
+quantization: fp8
+
+max_model_len: 4096
+gpu_memory_utilization: 0.90
+limit_mm_per_prompt: '{"image":1,"video":0}'
+enable_prefix_caching: false
+enforce_eager: false
+
+port: 8000

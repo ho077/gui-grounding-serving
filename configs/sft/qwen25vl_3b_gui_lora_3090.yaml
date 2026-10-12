@@ -1,0 +1,69 @@
+# Qwen2.5-VL-3B · GUI grounding LoRA 微调 —— 云端 3090 (24GB) 主力配置
+#
+# 为什么是 3B 而不是更大的模型：
+#   1. GUI-Actor 论文给了 Qwen2.5-VL-3B 的公开数字（ScreenSpot-v2 80.9 / Pro 25.9），
+#      可作为**自检锚点**——我们跑出来的数如果离它太远，说明评测脚本或数据处理有问题。
+#      换一个没有公开对照的模型，等于失去了这个纠错机制。
+#   2. 3B 在 24GB 上余量充足，可以把省下的显存投到更高分辨率（见 image_max_pixels）。
+#
+# 分辨率是定位任务的命门：目标可能只有 20×20 px 的图标，
+# 图被压得太狠，小目标直接消失，准确率会呈现「大元素无损、小元素归零」的假象。
+
+### model
+model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
+image_max_pixels: 1605632       # ≈1408×1140。GUI 截图多为 1920×1080，压太狠会丢小图标
+video_max_pixels: 16384
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32                   # 定位任务比对话任务更需要容量，16 偏小
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target: all
+freeze_vision_tower: true       # 见下方说明
+train_mm_proj: true             # 投影层必须跟着学，否则跨模态对齐退化
+
+### dataset
+dataset: gui_grounding_train
+template: qwen2_vl
+cutoff_len: 2048
+max_samples: 100000
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+overwrite_cache: true
+
+### output
+output_dir: saves/qwen25vl-3b-gui/lora/sft
+logging_steps: 10
+save_steps: 300
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+optim: adamw_torch
+max_grad_norm: 1.0
+ddp_timeout: 180000000
+
+# 关于 freeze_vision_tower=true
+# ------------------------------
+# 冻结的三个理由：
+#   1. 省约 1.2GB 显存和对应的优化器状态
+#   2. 小数据微调把预训练视觉表征带偏，是 VLM 微调最常见的事故
+#   3. Qwen2.5-VL 原生就有坐标输出能力，微调主要是教它**按我们的格式稳定输出**，
+#      坐标系映射学在语言侧即可
+# 代价：定位精度上限可能略低。
+# 这是一个**可以做的消融**：把本项改成 false 重跑，对比 offset p50 的变化。
+# 若结论显著，它本身就是 README 里值得写的一节。

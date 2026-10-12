@@ -1,0 +1,15 @@
+# 关键：shell 脚本必须以 LF 换行。
+# 若被存成 CRLF，clone 到 Linux 云端后会报 "/bin/bash^M: bad interpreter"，
+# 整个云端流程第一步就卡住。
+*.sh text eol=lf
+
+# 脚本与源码统一 LF，保证本地 Windows 和云端 Linux 行为一致
+*.py text eol=lf
+Makefile text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+
+# Markdown / LICENSE 允许各自平台习惯换行
+*.md text=auto
