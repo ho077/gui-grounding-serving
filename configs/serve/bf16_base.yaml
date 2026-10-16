@@ -1,0 +1,26 @@
+# 零样本基线（未微调的基座）—— 所有精度结论的「分母」
+#
+# 为什么必须有这一档：量化损失只能相对同一个基座度量。
+# 如果没有「微调前 BF16 是多少」，SFT 带来的提升和量化带来的损失
+# 就会混在一张表里，谁也说不清是谁的功劳。
+#
+# 路径用 ${MODEL_DIR} 展开，同一份配置本机 / 云端通用：
+#   MODEL_DIR=/root/models bash scripts/02_... 或 export MODEL_DIR=...
+model: ${MODEL_DIR}/Qwen2.5-VL-3B-Instruct
+served_model_name: qwen25vl-3b-base
+dtype: bfloat16
+quantization: null
+
+# GUI 截图动辄 2560×1440。Qwen2.5-VL 每 28×28 像素一个 patch，
+# 一张全高清桌面截图 ≈ 91×51 ≈ 4600 个图像 token，
+# 4096 会把长边直接截掉——小图标正好在边缘，指标会莫名其妙地差。
+# 因此这里必须开到 8192。
+max_model_len: 8192
+gpu_memory_utilization: 0.90
+limit_mm_per_prompt: '{"image":1,"video":0}'
+# 【方法论】官方 recipe 要求 benchmark 期间关闭 prefix caching。
+# 不关的话重复截图第二次几乎零 prefill，TTFT 好看到失真，档位间不可比。
+enable_prefix_caching: false
+enforce_eager: false
+
+port: 8000

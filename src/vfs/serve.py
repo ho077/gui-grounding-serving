@@ -2,7 +2,7 @@
 
 为什么必须前置校验
 ------------------
-一次 vLLM 加载 Qwen3-VL-4B 要几十秒到几分钟。若在 3090 上误配 FP8，
+一次 vLLM 加载 3B/4B 权重要几十秒到几分钟。若在 3090 上误配 FP8，
 要等到权重加载阶段才报 dtype 不支持 —— 每个档位浪费几分钟，
 跑一轮 BF16/FP8/INT4 的扫描就浪费一轮 coffee break。
 这里直接在启动前用 ``hardware`` 模块判掉，不支持就明确跳过并给出替代建议。
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +28,23 @@ from . import hardware
 def load_config(path: Path) -> dict:
     if yaml is None:
         raise SystemExit("需要 PyYAML：pip install pyyaml")
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return _expand_env(cfg)
+
+
+def _expand_env(node):
+    """展开字符串里的 ${VAR}，让同一份配置能跨机器复用。
+
+    权重目录在不同机器上路径不同（本机 D 盘、云端 /root、HF 仓库 id），
+    写死就得为每台机器维护一份副本，很容易出现「改了一处漏一处」。
+    """
+    if isinstance(node, dict):
+        return {k: _expand_env(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_expand_env(v) for v in node]
+    if isinstance(node, str) and "${" in node:
+        return os.path.expandvars(node)
+    return node
 
 
 def build_cmd(cfg: dict, extra: list[str] | None = None) -> list[str]:

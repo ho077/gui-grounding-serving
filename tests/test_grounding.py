@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from vfs.grounding import (  # noqa: E402
     Sample, Record, EvalResult, evaluate, parse_point, _to_pixels,
+    point_to_pixels, _stratified_limit, is_refusal,
 )
 
 # mock 服务固定返回归一化坐标 (500, 500)，即图像正中
@@ -99,6 +100,90 @@ def test_to_pixels() -> None:
     log()
 
 
+def test_parse_variants() -> None:
+    log("--- 输出格式变体 ---")
+    # Qwen2.5-VL 原生 grounding 用 point_2d 键，还常带 label。
+    # 只认 "point" 会把它判成解析失败（实测占失败样本 6 成）。
+    check("point_2d", parse_point('{"point_2d": [1345, 116]}'), (1345.0, 116.0))
+    check("point_2d 带 label",
+          parse_point('```json\n{\n "point_2d": [1345, 116],\n'
+                      ' "label": "search bar"\n}\n```'),
+          (1345.0, 116.0))
+    log()
+
+
+def test_refusal() -> None:
+    log("--- 拒答 vs 格式失败 ---")
+    # 模型明确说"找不到"是答错了，不能混进解析失败里从分母中排除
+    check("There are none", is_refusal("There are none."), True)
+    check("not found", is_refusal("The element is not found"), True)
+    check("cannot find", is_refusal("I cannot find it"), True)
+    check("正常输出不算拒答",
+          is_refusal('{"point_2d": [1345, 116]}'), False)
+    check("空输出不算拒答", is_refusal(""), False)
+    log()
+
+
+def test_strict_accuracy() -> None:
+    log("--- 保守准确率 ---")
+    r = EvalResult(tag="t")
+    r.records = [Record(hit=True, offset_px=2.0, area=100.0,
+                        platform="mobile", inst_type="text")]
+    r.failures = 1      # 格式失败：不计入 accuracy 分母
+    r.refusals = 1      # 明确答错：应计入保守分母
+    s = r.summary()
+    check("accuracy 只看已定位", s["overall"]["accuracy"], 1.0)
+    check("n_total 计入全部", s["n_total"], 3)
+    check("accuracy_strict 把失败全算未命中",
+          s["overall"]["accuracy_strict"], 1 / 3, tol=1e-3)
+    log()
+
+
+def test_point_to_pixels() -> None:
+    log("--- 模型输出坐标 → 像素 ---")
+    # 事故复盘：零样本 Qwen2.5-VL 输出绝对像素，旧代码无条件按 [0,1000] 缩放，
+    # 2560x1440 图上 (2408,159) 被算成 (6164,229)，acc 掉到 0.5%。
+    # 修复后：越界即判像素；约定由 --coord-space 显式指定。
+    check("像素越界→按像素",
+          point_to_pixels((2408, 159), 2560, 1440, "auto"), (2408.0, 159.0))
+    check("归一化中点→图像中心",
+          point_to_pixels((500, 500), 2560, 1440, "auto"), (1280.0, 720.0))
+    check("强制像素口径",
+          point_to_pixels((2408, 159), 2560, 1440, "pixel"), (2408.0, 159.0))
+    check("强制归一化口径（旧行为，保留可复现）",
+          point_to_pixels((2408, 159), 2560, 1440, "norm"), (6164.48, 228.96),
+          tol=0.01)
+    check("左上角", point_to_pixels((0, 0), 960, 540, "auto"), (0.0, 0.0))
+    check("右下角", point_to_pixels((1000, 1000), 960, 540, "auto"),
+          (960.0, 540.0))
+    log()
+
+
+def test_stratified_limit() -> None:
+    log("--- --limit 按平台比例分摊 ---")
+    def bucket(platform: str, n: int) -> list[Sample]:
+        return [Sample(img_b64="", img_w=10, img_h=10, instruction="x",
+                       bbox=[0, 0, 5, 5], platform=platform) for _ in range(n)]
+
+    b = [bucket("mobile", 50), bucket("web", 30), bucket("desktop", 20)]
+    got = _stratified_limit(b, 0)
+    check("不限量取全部", len(got), 100)
+    got = _stratified_limit(b, 999)
+    check("limit 超过总数取全部", len(got), 100)
+
+    got = _stratified_limit(b, 50)
+    check("limit 50 命中总数", len(got), 50)
+    cnt = {p: sum(1 for s in got if s.platform == p) for p in
+           ("mobile", "web", "desktop")}
+    check("mobile 按比例 25", cnt["mobile"], 25)
+    check("web 按比例 15", cnt["web"], 15)
+    check("desktop 按比例 10", cnt["desktop"], 10)
+    # 退化情形对照：直接截断会只剩 mobile，分层统计全废
+    check("对照：直接截断只剩 mobile",
+          len(b[0][:50]) == 50 and cnt["web"] > 0, True)
+    log()
+
+
 def test_sample_geom() -> None:
     log("--- 几何量 ---")
     s = Sample(img_b64="", img_w=1000, img_h=500, instruction="x",
@@ -165,7 +250,12 @@ def main() -> None:
     log("grounding 评测自检")
     log("=" * 60)
     test_parse_point()
+    test_parse_variants()
+    test_refusal()
+    test_strict_accuracy()
     test_to_pixels()
+    test_point_to_pixels()
+    test_stratified_limit()
     test_sample_geom()
     test_aggregation()
     test_end_to_end()

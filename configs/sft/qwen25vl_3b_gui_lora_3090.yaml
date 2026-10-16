@@ -10,7 +10,10 @@
 # 图被压得太狠，小目标直接消失，准确率会呈现「大元素无损、小元素归零」的假象。
 
 ### model
-model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
+# 与 configs/serve/*.yaml 同一套约定：${MODEL_DIR} 由 02_train.sh 展开。
+# 写死 HF repo id 会在云端触发重新下载（且 GitHub/HF 直连不稳定），
+# 写死绝对路径则本机与云端要各存一份、容易改一处漏一处。
+model_name_or_path: ${MODEL_DIR}/Qwen2.5-VL-3B-Instruct
 image_max_pixels: 1605632       # ≈1408×1140。GUI 截图多为 1920×1080，压太狠会丢小图标
 video_max_pixels: 16384
 trust_remote_code: true

@@ -3,13 +3,17 @@
 
 数据源
 ------
-训练：
-    showlab/ShowUI-web          网页截图 + 元素标注
-    showlab/ShowUI-desktop-8K   桌面截图（8K 量级）
-    Yuxiang007/AMEX             移动端（可选，量较大）
+训练（默认）：
+    showlab/ShowUI-desktop-8K   桌面截图（8K 量级）       ~0.5 GB
+训练（可选，需显式加 flag）：
+    showlab/ShowUI-web          网页截图，images.tar.gz   ~40 GB
+    Yuxiang007/AMEX             移动端，分包压缩          ~87 GB
 评测：
-    KevinQHLin/ScreenSpot       原始 ScreenSpot，mobile/web/desktop
-    likaixin/ScreenSpot-Pro     高分辨率专业软件，更难
+    KevinQHLin/ScreenSpot       原始 ScreenSpot           ~1.1 GB
+    likaixin/ScreenSpot-Pro     高分辨率专业软件（可选）  ~1.6 GB
+
+体积是硬约束：租来的云盘常常只有 50 GB，默认三个一起下会直接撑爆。
+因此默认只下 desktop-8K + ScreenSpot，大集用 --with-web / --with-amex 显式开启。
 
 网络
 ----
@@ -36,11 +40,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 TRAIN_REPOS = {
-    "ShowUI-web": "showlab/ShowUI-web",
-    "ShowUI-desktop": "showlab/ShowUI-desktop-8K",
+    "ShowUI-desktop": "showlab/ShowUI-desktop-8K",   # ~0.5 GB，默认下
+}
+# 大数据集：默认不下，避免撑爆小数据盘
+BIG_TRAIN_REPOS = {
+    "ShowUI-web": "showlab/ShowUI-web",              # ~40 GB
+    "AMEX": "Yuxiang007/AMEX",                       # ~87 GB
 }
 EVAL_REPOS = {
-    "ScreenSpot": "KevinQHLin/ScreenSpot",
+    "ScreenSpot": "KevinQHLin/ScreenSpot",           # ~1.1 GB
 }
 
 
@@ -185,15 +193,33 @@ def write_dataset_info(train_file: Path) -> None:
 
 
 def summarize_eval(roots: list[Path]) -> None:
+    """统计评测集条目数。
+
+    早期版本按 ShowUI 的嵌套 `element` 结构数，而 ScreenSpot 是扁平结构，
+    于是永远报 0 —— 正是这个 0 让人以为数据没下全、白查一轮磁盘。
+    这里复用评测侧的同一套文件选择逻辑（vfs.grounding._screenspot_files），
+    保证"数据准备说有多少条"和"评测实际跑多少条"是同一个口径。
+    """
+    from vfs.grounding import _screenspot_files  # 单一口径来源
+
     for root in roots:
         if not root.exists():
             log(f"  !! 评测集缺失: {root}")
             continue
+        files = _screenspot_files(root)
+        if not files:
+            log(f"  评测集 {root.name}: 未识别到元数据（目录结构可能变了）")
+            continue
         n = 0
-        for _, rows in iter_metadata(root):
-            for row in rows:
-                n += len(row.get("element", []))
-        log(f"  评测集 {root.name}: 约 {n} 个标注元素")
+        for meta, _ in files:
+            try:
+                rows = json.loads(meta.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(rows, list):
+                n += len(rows)
+        log(f"  评测集 {root.name}: {n} 个标注元素"
+            f"（{len(files)} 个元数据文件）")
 
 
 def main() -> None:
@@ -204,9 +230,12 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="限制训练样本数（调试用）")
     ap.add_argument("--max-per-image", type=int, default=3,
                     help="每张图最多取几个元素，避免单图刷屏")
-    ap.add_argument("--with-amex", action="store_true", help="额外下 AMEX（量较大）")
+    ap.add_argument("--with-web", action="store_true",
+                    help="额外下 ShowUI-web（约 40 GB，需确认磁盘够）")
+    ap.add_argument("--with-amex", action="store_true",
+                    help="额外下 AMEX（约 87 GB，需确认磁盘够）")
     ap.add_argument("--with-pro", action="store_true",
-                    help="额外下 ScreenSpot-Pro（高分辨率，更难）")
+                    help="额外下 ScreenSpot-Pro（约 1.6 GB，高分辨率更难）")
     ap.add_argument("--skip-download", action="store_true")
     args = ap.parse_args()
 
@@ -225,13 +254,18 @@ def main() -> None:
         for name, repo in EVAL_REPOS.items():
             log(f"下载评测集 {repo} ...")
             download(repo, base / "eval" / name, args.endpoint)
+        if args.with_web:
+            download(BIG_TRAIN_REPOS["ShowUI-web"], raw / "ShowUI-web",
+                     args.endpoint)
         if args.with_amex:
-            download("Yuxiang007/AMEX", raw / "AMEX", args.endpoint)
+            download(BIG_TRAIN_REPOS["AMEX"], raw / "AMEX", args.endpoint)
         if args.with_pro:
             download("likaixin/ScreenSpot-Pro", base / "eval" / "ScreenSpot-Pro",
                      args.endpoint)
 
     train_roots = [raw / n for n in TRAIN_REPOS]
+    if args.with_web:
+        train_roots.append(raw / "ShowUI-web")
     if args.with_amex:
         train_roots.append(raw / "AMEX")
     train_file = base / "train" / "gui_grounding_train.json"
