@@ -37,6 +37,7 @@ import json
 # 训练目标的坐标空间：norm1000（[0,1000] 归一化）或 pixel（绝对像素，基座原生）
 TARGET_SPACE = "norm1000"
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -129,9 +130,42 @@ def to_1000(pt, iw: int, ih: int) -> tuple[int, int]:
     return int(round(x / max(iw, 1) * 1000)), int(round(y / max(ih, 1) * 1000))
 
 
+def to_target(pt, iw: int, ih: int) -> tuple[int, int]:
+    """按 TARGET_SPACE 把 ShowUI 的归一化 point 转成训练目标。
+
+    pixel  = 基座原生口径（实测优于 [0,1000]，见 docs/07-results.md 2.5）
+    norm1000 = [0,1000] 归一化
+    """
+    x, y = float(pt[0]), float(pt[1])
+    if x <= 1.5 and y <= 1.5:
+        x, y = x * iw, y * ih
+    if TARGET_SPACE == "pixel":
+        return int(round(x)), int(round(y))
+    return to_1000(pt, iw, ih)
+
+
+def resolve_img(img_root: Path, img: str) -> Path | None:
+    """ShowUI-web 的 img_url 是数据集制作时的绝对路径
+    （`/blob/v-lqinghong/data/.../images/004_Edge_xxx/90/screenshot-10.png`），
+    本地只保留了 `images/` 之后的部分，直接拼路径必然找不到。
+    """
+    p = img_root / img
+    if p.exists():
+        return p
+    if "images/" in img:
+        q = img_root / img.split("images/", 1)[1]
+        if q.exists():
+            return q
+    return None
+
+
 def build_train(roots: list[Path], out: Path, max_per_image: int,
                 limit: int) -> int:
-    """把 ShowUI 系数据转成 LLaMA-Factory sharegpt 格式。"""
+    """把 ShowUI 系数据转成 LLaMA-Factory sharegpt 格式。
+
+    desktop（parquet）和 web（metadata json + 解压出的 images/）共用这套逻辑，
+    区别只在图片能不能落盘。
+    """
     from vfs.grounding import PROMPT_TEMPLATE  # 与评测共用同一 prompt
 
     rows: list[dict] = []
@@ -143,8 +177,8 @@ def build_train(roots: list[Path], out: Path, max_per_image: int,
         for meta, items in iter_metadata(root):
             for row in items:
                 img = row.get("img_url") or row.get("image") or ""
-                ip = img_root / img
-                if not ip.exists():
+                ip = resolve_img(img_root, img)
+                if ip is None:
                     continue
                 size = row.get("img_size") or [0, 0]
                 iw, ih = int(size[0]), int(size[1])
@@ -152,7 +186,7 @@ def build_train(roots: list[Path], out: Path, max_per_image: int,
                     pt = el.get("point")
                     if not pt:
                         continue
-                    gx, gy = to_1000(pt, iw, ih)
+                    gx, gy = to_target(pt, iw, ih)
                     rows.append({
                         "id": f"{root.name}-{len(rows)}",
                         "images": [str(ip.resolve())],
@@ -172,6 +206,8 @@ def build_train(roots: list[Path], out: Path, max_per_image: int,
                 break
         log(f"  {root.name}: +{len(rows) - n_before} 条")
 
+    if out is None:
+        return rows
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:
         for r in rows:
@@ -332,6 +368,9 @@ def main() -> None:
                          "约 1.4MB/张，2000 条约 2.8GB")
     ap.add_argument("--img-dir", default="data/train_images",
                     help="parquet 内嵌图片的解包目录")
+    ap.add_argument("--web-root", default="",
+                    help="ShowUI-web 的根目录（内含 images/），用于补网页多样性")
+    ap.add_argument("--web-limit", type=int, default=0, help="网页样本上限")
     ap.add_argument("--skip-download", action="store_true")
     args = ap.parse_args()
 
@@ -369,23 +408,34 @@ def main() -> None:
     if args.with_amex:
         train_roots.append(raw / "AMEX")
     train_file = base / "train" / "gui_grounding_train.json"
-    n = 0
+    all_rows: list[dict] = []
     if args.parquet:
         # 优先用 parquet（完整数据），失败再回退到元数据解析
-        rows = build_train_from_parquet(
+        all_rows = build_train_from_parquet(
             raw / "ShowUI-desktop", Path(args.img_dir),
             args.max_per_image, args.parquet_limit)
-        if rows:
-            train_file.parent.mkdir(parents=True, exist_ok=True)
-            with train_file.open("w", encoding="utf-8") as f:
-                for r in rows:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            n = len(rows)
-            log(f"训练集 -> {train_file}（{n} 条，来自 parquet）")
-        else:
+        if not all_rows:
             log("  !! parquet 未产出样本，回退到元数据解析")
-    if not n:
-        n = build_train(train_roots, train_file, args.max_per_image, args.limit)
+    if not all_rows:
+        all_rows = build_train(train_roots, None, args.max_per_image, args.limit)
+
+    # 网页数据：ShowUI-web 的图在 43GB 的 images.tar.gz 里，用 HTTP Range
+    # 只取前一段再解压即可，不必下全量。这是补"底图多样性"的关键来源 ——
+    # desktop 只有 101 张截图，而评测里 mobile+web 占 74%。
+    if args.web_root:
+        web_rows = build_train([Path(args.web_root)], None,
+                               args.max_per_image, args.web_limit)
+        log(f"  + 网页数据 {len(web_rows)} 条（来自 {args.web_root}）")
+        all_rows = all_rows + web_rows
+
+    n = len(all_rows)
+    if n:
+        random.Random(0).shuffle(all_rows)  # 打散，避免同平台的样本连成块
+        train_file.parent.mkdir(parents=True, exist_ok=True)
+        with train_file.open("w", encoding="utf-8") as f:
+            for r in all_rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        log(f"训练集 -> {train_file}（{n} 条）")
     if n == 0:
         log("!! 训练集为空。常见原因：")
         log("   1) 下载失败 —— 换 --endpoint 重试")

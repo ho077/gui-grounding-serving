@@ -46,7 +46,7 @@ dataloader_num_workers: 4
 overwrite_cache: true
 
 ### output
-output_dir: saves/qwen25vl-3b-gui/lora/sft_v3
+output_dir: saves/qwen25vl-3b-gui/lora/sft_v4
 logging_steps: 10
 # save_steps 必须小于总步数，否则训练全程一个 checkpoint 都不落，中途被打断就得重来。
 # 1600 条 / 有效 batch 16 ≈ 100 步 → 50 步存一次。
