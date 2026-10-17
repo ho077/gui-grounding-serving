@@ -22,8 +22,8 @@ trust_remote_code: true
 stage: sft
 do_train: true
 finetuning_type: lora
-lora_rank: 32                   # 定位任务比对话任务更需要容量，16 偏小
-lora_alpha: 64
+lora_rank: 16                   # 1600 条样本用 16 足够；上次 32 + lr1e-4 + 303 条直接把模型训崩
+lora_alpha: 32
 lora_dropout: 0.05
 lora_target: all
 freeze_vision_tower: true            # 见下方说明
@@ -46,11 +46,11 @@ dataloader_num_workers: 4
 overwrite_cache: true
 
 ### output
-output_dir: saves/qwen25vl-3b-gui/lora/sft
+output_dir: saves/qwen25vl-3b-gui/lora/sft_v3
 logging_steps: 10
-# 训练集小（约 300 条 → 有效步数约 38 步）时，save_steps 必须小于总步数，
-# 否则训练全程一个 checkpoint 都不落，中途被打断就得从头再来。
-save_steps: 20
+# save_steps 必须小于总步数，否则训练全程一个 checkpoint 都不落，中途被打断就得重来。
+# 1600 条 / 有效 batch 16 ≈ 100 步 → 50 步存一次。
+save_steps: 50
 save_total_limit: 2
 plot_loss: true
 overwrite_output_dir: true
@@ -59,8 +59,8 @@ report_to: none
 ### train
 per_device_train_batch_size: 2
 gradient_accumulation_steps: 8
-learning_rate: 1.0e-4
-num_train_epochs: 2.0
+learning_rate: 2.0e-5            # 从 1e-4 降 5 倍：上次 303 条 + lr1e-4 造成灾难性遗忘
+num_train_epochs: 1.0
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
 bf16: true

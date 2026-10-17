@@ -31,7 +31,11 @@ ShowUI 系列元数据里的 point / bbox 是**归一化** [0,1]。
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+
+# 训练目标的坐标空间：norm1000（[0,1000] 归一化）或 pixel（绝对像素，基座原生）
+TARGET_SPACE = "norm1000"
 import os
 import sys
 from pathlib import Path
@@ -207,30 +211,39 @@ def build_train_from_parquet(root: Path, img_dir: Path, max_per_image: int,
             for r in batch.to_pylist():
                 if limit and len(rows) >= limit:
                     return rows
-                key = r.get("image_url") or f"{f.stem}-{len(rows)}"
-                if per_img.get(key, 0) >= max_per_image:
-                    continue
                 pt = r.get("point")
                 if not pt or len(pt) != 2:
                     continue
+                blob = (r.get("image") or {}).get("bytes")
+                if not blob:
+                    continue
+                # 用**图像内容哈希**做键，不能用 image_url：
+                # 不同 parquet 里存在同名 "screenshots/message/screen_1.png"，
+                # 按 url 去重会把不同图当成同一张（实测 1600 条被压成 303 条），
+                # 落盘时还会互相覆盖。
+                key = hashlib.sha1(blob).hexdigest()[:16]
+                if per_img.get(key, 0) >= max_per_image:
+                    continue
 
-                ip = img_dir / key.replace("/", "_")
+                ip = img_dir / f"{key}.png"
                 if not ip.exists():
-                    blob = (r.get("image") or {}).get("bytes")
-                    if not blob:
-                        continue
                     ip.write_bytes(blob)
-                # 图像尺寸只为把像素坐标折算成 [0,1000] 用；
-                # parquet 里的 point 已是 [0,1] 归一化，多数情况不需要尺寸。
-                iw = ih = 0
-                if max(float(pt[0]), float(pt[1])) > 1.5:
-                    try:
-                        from PIL import Image
-                        with Image.open(ip) as im:
-                            iw, ih = im.size
-                    except Exception:
-                        continue
-                gx, gy = to_1000(pt, iw, ih)
+                # 图像尺寸：像素目标要用到；[0,1000] 目标只在源数据是像素时才需要。
+                try:
+                    from PIL import Image
+                    with Image.open(ip) as im:
+                        iw, ih = im.size
+                except Exception:
+                    continue
+                if TARGET_SPACE == "pixel":
+                    # 用基座原生的绝对像素当目标：实测强加 [0,1000] 并不会被模型
+                    # 真正采纳，反而扰动输出尺度、让定位精度从 p50 24px 掉到 104px。
+                    x, y = float(pt[0]), float(pt[1])
+                    if x <= 1.5 and y <= 1.5:
+                        x, y = x * iw, y * ih
+                    gx, gy = int(round(x)), int(round(y))
+                else:
+                    gx, gy = to_1000(pt, iw, ih)
                 rows.append({
                     "id": f"{root.name}-pq-{len(rows)}",
                     "images": [str(ip.resolve())],
@@ -307,6 +320,10 @@ def main() -> None:
                     help="额外下 AMEX（约 87 GB，需确认磁盘够）")
     ap.add_argument("--with-pro", action="store_true",
                     help="额外下 ScreenSpot-Pro（约 1.6 GB，高分辨率更难）")
+    ap.add_argument("--target-space", choices=["norm1000", "pixel"],
+                    default="norm1000",
+                    help="训练目标的坐标空间。pixel=顺着基座原生输出，"
+                         "实测比强加 [0,1000] 更少扰动定位精度")
     ap.add_argument("--parquet", action="store_true",
                     help="从 data/*.parquet 构建训练集（完整数据约 7.5k 条；"
                          "只读元数据只有 303 条 = 4%，微调会退化）")
@@ -317,6 +334,10 @@ def main() -> None:
                     help="parquet 内嵌图片的解包目录")
     ap.add_argument("--skip-download", action="store_true")
     args = ap.parse_args()
+
+    global TARGET_SPACE
+    TARGET_SPACE = args.target_space
+    log(f"[data] 训练目标坐标空间: {TARGET_SPACE}")
 
     base = Path(args.data_dir)
     if not base.is_absolute():
