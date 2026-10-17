@@ -1,0 +1,26 @@
+# AWQ W4A16 量化后的**基座**模型 —— 与零样本基线同一个模型的压缩版
+#
+# 为什么单独一个档位：本次实测的 SFT 产物精度已退化（见 docs/07-results.md），
+# 在退化模型上测量化损失没有意义。量化损失必须相对同一个基座度量，
+# 所以 AWQ 直接作用在 Qwen2.5-VL-3B-Instruct 上，与 bf16_zero_shot 构成对照组。
+#
+# 路径用 ${AWQ_DIR} 展开，本机 / 云端 / 根盘 / 数据盘共用同一份配置。
+model: ${AWQ_DIR}
+served_model_name: qwen25vl-3b-base-awq
+dtype: bfloat16
+# llmcompressor 产出 compressed-tensors 格式（config.json 里
+# quant_method="compressed-tensors"），vLLM 自动识别；
+# 强行写 quantization: awq 会让它按 autoawq 老格式找权重，反而加载失败。
+quantization: null
+
+# 16384 而不是 8192：vLLM 启动时用一张 max_pixels（12845056）的 dummy 图做
+# 显存 profiling，3584x3584 会算成 16384 个图像 token，直接超过 8192，
+# 报 "Failed to apply Qwen2_5_VLProcessor ... size=3584x3584"。
+# 实际评测图只有约 4900 token，这个上限不影响精度对比。
+max_model_len: 16384
+gpu_memory_utilization: 0.90
+limit_mm_per_prompt: '{"image":1,"video":0}'
+enable_prefix_caching: false
+enforce_eager: false
+
+port: 8000

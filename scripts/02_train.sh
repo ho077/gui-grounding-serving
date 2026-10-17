@@ -14,6 +14,10 @@ set -euo pipefail
 CFG="${1:-configs/sft/qwen25vl_3b_gui_lora_3090.yaml}"
 LF_DIR="${LF_DIR:-/root/work/LLaMA-Factory}"
 PYTHON="${PYTHON:-python}"
+# 用绝对路径调 CLI，不依赖 PATH。
+# 踩过：在 ssh 里 export PATH=...:$PATH 会被外层 shell 提前展开，
+# 把本机的 Windows PATH 注入远端，直接语法错误。
+LF_CLI="${LF_CLI:-llamafactory-cli}"
 
 echo "==> 训练配置: ${CFG}"
 
@@ -64,7 +68,7 @@ cd "${LF_DIR}"
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export WANDB_DISABLED=true
 
-llamafactory-cli train "${CFG_PATH}"
+"${LF_CLI}" train "${CFG_PATH}"
 
 echo
 echo "==> 训练完成。LoRA 权重在 saves/ 下，下一步："

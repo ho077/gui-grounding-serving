@@ -4,7 +4,8 @@
 # 因此 limit_mm_per_prompt 锁死 1 张图。
 # 但 max_model_len 不能小：GUI 截图动辄 2560×1440，Qwen2.5-VL 每 28×28
 # 一个 patch，一张全高清桌面截图 ≈ 4600 个图像 token，4096 会截断长边。
-model: outputs/qwen25vl-3b-gui-sft-merged
+# 合并后的 SFT 模型目录。用 ${VAR} 是为了让本机/云端、根盘/数据盘共用同一份配置。
+model: ${MERGED_DIR}
 served_model_name: qwen25vl-3b-gui-bf16
 dtype: bfloat16
 quantization: null

@@ -31,6 +31,9 @@
 | 5 | `pkill -f 01_prepare_data` 把自己的 shell 也杀了，ssh 返回空输出 | 远程命令行字符串里含同样文本，`-f` 匹配到自身 | 括号技巧：`pkill -9 -f "01_prepare[_]data"` |
 | 6 | vLLM 启动报 `Found conflicts between 'rope_type=default' (modern field) and 'type=mrope' (legacy field)` | vllm 0.8.5 把 `transformers` 拉到了 **5.20.0**，与 Qwen2.5-VL 的 `config.json` 不兼容 | serve venv 降级 `transformers==4.57.6`（与 train venv 对齐） |
 | 7 | 根分区写满 | `/root/.cache` 占 8.8G（pip 缓存） | 删缓存 + 全部迁到 `/root` + pip 统一加 `--no-cache-dir` 防复发 |
+| 12 | 训练启动报 `ImportError: pyarrow requires NumPy 2.0 or newer, found 1.26.4` | train venv 里 `pyarrow 26` + `datasets 4` 是 numpy 2 时代的版本，numpy 却停在 1.26；而 `llmcompressor 0.4.1` 又要求 `numpy<2` | **不要升 numpy**（会破 llmcompressor），改降 `pyarrow==18.1.0`，两边都满足 |
+| 13 | ssh 里 `export PATH=...:$PATH` 把远端命令搞成语法错误 | 本机 shell 提前展开 `$PATH`，把 Windows PATH（含 `(x86)` 括号）注入远端 | 不碰 PATH：改用绝对路径（新增 `LF_CLI` 变量）；或把启动器写成远端脚本文件再执行 |
+| 14 | 停掉 vLLM 后显存仍占 21GB，端口却已拒连 | vLLM 的多进程 worker（`python -c from vllm...`）没被主进程带走 | 用 `nvidia-smi --query-compute-apps` 找占用者，按 PID 单独 kill |
 
 ---
 
@@ -120,7 +123,42 @@ dump 原始输出后发现**两类完全不同的东西被混为一谈**：
 
 ---
 
-## 4. 一条通用教训
+## 4. 训练配置类（版本相关，最容易照抄旧教程踩到）
+
+用 LLaMA-Factory **0.9.6** 时，两份流传很广的旧配置直接跑不通：
+
+| # | 现象 | 根因 | 解法 |
+|---|---|---|---|
+| 15 | `ValueError: Some keys are not used by the HfArgumentParser: ['train_mm_proj']` | 0.9.x 已移除 `train_mm_proj`，语义挪到了 `freeze_multi_modal_projector`（默认 `true`） | 写 `freeze_multi_modal_projector: false` —— 即"投影层不冻结、跟着学" |
+| 16 | `RuntimeError: shape mismatch: value tensor of shape [3, 2067] cannot be broadcast to indexing result of shape [3, 2048]` | `cutoff_len: 2048` **恰好等于图像 token 数**：`image_max_pixels 1605632 / 28² = 2048`。文本还没进来就被截满，position_ids 与截断后的序列长度对不上 | `cutoff_len: 4096`（图像 2048 + 指令约 60，留余量） |
+
+第 16 条与服务侧的 `max_model_len` 是同一个坑的两个面：
+
+> **凡是"长度上限"参数，都要先算一遍图像 token 数（像素面积 / 28²），再留文本余量。**
+
+| 场景 | 参数 | 算出来的图像 token | 踩坑值 | 正确值 |
+|---|---|---|---|---|
+| vLLM 部署（全分辨率 2560×1440） | `max_model_len` | ≈ 4600 | 4096（截掉长边） | 8192 |
+| LLaMA-Factory 训练（`image_max_pixels` 1605632） | `cutoff_len` | 2048（正好） | 2048（直接崩） | 4096 |
+
+---
+
+## 5. 量化与服务类
+
+| # | 现象 | 根因 | 解法 |
+|---|---|---|---|
+| 17 | `ImportError: cannot import name 'oneshot' from 'llmcompressor'` | 装的 0.4.1 没有顶层 `oneshot` | — |
+| 18 | 装上 0.5.2 后又`ModuleNotFoundError: llmcompressor.modifiers.awq` | **0.4.1 根本没有 AWQ 模块**（只有 quantization / smoothquant / obcq） | 升到 **0.5.2**（只连带动 `compressed-tensors`，torch / transformers / numpy 都不动） |
+| 19 | 想直接升最新版 → `Would install torch-2.14.0 ... cuda-toolkit-13.0.3.0` | 新版 llmcompressor 绑 CUDA 13 工具链，而**驱动 550 最高只到 CUDA 12.4** | 不要盲升；按 CUDA 12.4 能用的版本挑（0.5.2） |
+| 20 | `ValueError: Unrecognized configuration class Qwen2_5_VLConfig for this kind of AutoModel: AutoModelForCausalLM` | `oneshot(model="<路径>")` 内部用 `AutoModelForCausalLM` 加载，VLM 的 config 类不匹配 | 自己用 `AutoModelForImageTextToText.from_pretrained(...)` 加载后**把模型实例**传给 `oneshot` |
+| 21 | `ValueError: Mismatch in image token count ... Got ids=[8177] and text=[9000]` | 校准图 3360×2100 按默认 `max_pixels` 不缩放，单图就 **9000 个图像 token**，`max_seq_length` 给 2048/8192 都会被截断 | `max_seq_length=12288` |
+| 22 | `serve.py` 报 `FileNotFoundError: 'vllm'` | 构造命令时用的是裸 `vllm`，要求 venv/bin 在 PATH 上；ssh 非交互执行时没有 | 改成 `sys.executable -m vllm.entrypoints.openai.api_server` |
+| 23 | 改完又报 `api_server.py: error: unrecognized arguments: <模型路径>` | `vllm serve` 收位置参数，`api_server` 要 `--model` | 用 `--model <路径>` |
+| 24 | 停掉 vLLM 后显存仍占 20GB，`ps` 里却找不到 | 残留的是 `python -c from multiprocessing.spawn import spawn_main`——命令行里既没有 `vllm` 也没有 `api_server`，所有常见 pkill 模式都打不中 | `ps -eo pid,rss,cmd --sort=-rss \| head` 按内存排序找它，按 PID kill。**别用 `pkill -f xxx` 且命令串里含 xxx，会杀掉自己**（已在第 5 条踩过） |
+
+---
+
+## 6. 一条通用教训
 
 > **数字差一个数量级时，先怀疑自己的测量，再怀疑模型。**
 >

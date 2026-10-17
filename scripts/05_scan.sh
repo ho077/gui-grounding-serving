@@ -9,6 +9,7 @@
 #   EVAL_LIMIT=200 bash scripts/05_scan.sh               # 小规模试跑
 set -uo pipefail
 
+PYTHON="${PYTHON:-python}"       # 云端传 venv 里的绝对路径
 VARIANTS="${VARIANTS:-bf16 awq_int4 fp8}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 NUM_REQUESTS="${NUM_REQUESTS:-64}"
@@ -23,7 +24,7 @@ mkdir -p results logs
 # 3090 上 FP8 会被判 SKIP。与其等 vLLM 加载几分钟后在权重阶段报错，
 # 不如启动前就判掉。
 echo "==> 硬件能力体检"
-python - <<'PY' > results/_variant_status.tsv
+"${PYTHON}" - <<'PY' > results/_variant_status.tsv
 import sys
 from pathlib import Path
 sys.path.insert(0, "src")
@@ -60,11 +61,11 @@ for variant in $VARIANTS; do
     continue
   fi
 
-  MODEL=$(python -c "import yaml;print(yaml.safe_load(open('configs/serve/${variant}.yaml'))['served_model_name'])")
+  MODEL=$("${PYTHON}" -c "import yaml;print(yaml.safe_load(open('configs/serve/${variant}.yaml'))['served_model_name'])")
   echo
   echo "==> [${variant}] 启动服务 (${MODEL})"
 
-  python -m vfs.serve --config "configs/serve/${variant}.yaml" \
+  "${PYTHON}" -m vfs.serve --config "configs/serve/${variant}.yaml" \
       --port "${PORT}" > "logs/serve_${variant}.log" 2>&1 &
   SRV_PID=$!
 
@@ -77,16 +78,17 @@ for variant in $VARIANTS; do
   echo "    服务就绪"
 
   echo "    -> 定位精度评测"
-  python -m vfs.grounding \
+  "${PYTHON}" -m vfs.grounding \
       --base-url "${BASE_URL}" \
       --model "${MODEL}" \
       --data-dir data/eval/ScreenSpot \
       --limit "${EVAL_LIMIT}" \
       --tag "${variant}" \
+      --coord-space auto \
       --out-dir results || echo "    !! 评测失败（见上）"
 
   echo "    -> 速度压测（并发 ${CONCURRENCY}）"
-  python -m vfs.bench \
+  "${PYTHON}" -m vfs.bench \
       --base-url "${BASE_URL}" \
       --model "${MODEL}" \
       --num-requests "${NUM_REQUESTS}" \
@@ -98,11 +100,17 @@ for variant in $VARIANTS; do
   echo "    停止服务"
   kill ${SRV_PID} 2>/dev/null || true
   wait ${SRV_PID} 2>/dev/null || true
-  sleep 5
+  # vLLM 是多进程的，只杀主进程会留下 worker 继续占显存
+  # （实测残留 21GB，下一档位直接 OOM）。按进程命令行补一刀。
+  pkill -9 -f 'vllm[ ]serve' 2>/dev/null || true
+  pkill -9 -f 'python -c from vllm' 2>/dev/null || true
+  sleep 8
+  USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+  echo "    显存残留: ${USED} MiB"
 done
 
 rm -f results/_variant_status.tsv
 
 echo
 echo "==> 汇总"
-python -m vfs.report --results-dir results
+"${PYTHON}" -m vfs.report --results-dir results

@@ -26,13 +26,20 @@ lora_rank: 32                   # 定位任务比对话任务更需要容量，1
 lora_alpha: 64
 lora_dropout: 0.05
 lora_target: all
-freeze_vision_tower: true       # 见下方说明
-train_mm_proj: true             # 投影层必须跟着学，否则跨模态对齐退化
+freeze_vision_tower: true            # 见下方说明
+# 投影层必须跟着学，否则跨模态对齐退化。
+# 注意：LLaMA-Factory 0.9.x 用 freeze_multi_modal_projector: false 表达，
+# 旧版的 train_mm_proj: true 已经不存在，写了会报 HfArgumentParser 未使用键。
+freeze_multi_modal_projector: false
 
 ### dataset
 dataset: gui_grounding_train
 template: qwen2_vl
-cutoff_len: 2048
+# 2048 会直接崩：image_max_pixels 1605632 / 28² = **正好 2048 个图像 token**，
+# 文本还没进来就被截满，position_ids 与截断序列长度对不上，报
+# "shape mismatch: [3, 2067] cannot be broadcast to [3, 2048]"。
+# 留出图像 2048 + 指令约 60 token 的余量。
+cutoff_len: 4096
 max_samples: 100000
 preprocessing_num_workers: 16
 dataloader_num_workers: 4
@@ -41,7 +48,9 @@ overwrite_cache: true
 ### output
 output_dir: saves/qwen25vl-3b-gui/lora/sft
 logging_steps: 10
-save_steps: 300
+# 训练集小（约 300 条 → 有效步数约 38 步）时，save_steps 必须小于总步数，
+# 否则训练全程一个 checkpoint 都不落，中途被打断就得从头再来。
+save_steps: 20
 save_total_limit: 2
 plot_loss: true
 overwrite_output_dir: true

@@ -32,8 +32,16 @@ CALIB_DEFAULT = ROOT / "data" / "calib_gui.jsonl"
 TRAIN_DEFAULT = ROOT / "data" / "train" / "gui_grounding_train.json"
 
 
-def write_calibration_file(out: Path, n: int, train_file: Path) -> Path:
-    """从训练集中采样真实截图构造校准集。"""
+def write_calibration_file(out: Path, n: int, train_file: Path,
+                           max_side: int = 0) -> Path:
+    """从训练集中采样真实截图构造校准集。
+
+    max_side>0 时把长边压到该值再落盘（缓存到 `data/calib_img/`）。
+    原因：ShowUI-desktop 的截图是 3360x2100 这类，按默认 max_pixels 不缩放，
+    单图就是 9000 个图像 token —— 64 条校准要跑 36 分钟，而量化只用来看
+    每一层输入通道的相对大小，分辨率本身不改变 UI 内容的分布。
+    实测压到 1280 长边后单图约 2000 token，耗时降到 1/5。
+    """
     if not train_file.exists():
         raise SystemExit(
             f"未找到训练集 {train_file}，先跑 scripts/01_prepare_data.py\n"
@@ -51,6 +59,10 @@ def write_calibration_file(out: Path, n: int, train_file: Path) -> Path:
         raise SystemExit(f"训练集为空: {train_file}")
 
     out.parent.mkdir(parents=True, exist_ok=True)
+    cache_dir = out.parent / "calib_img"
+    if max_side > 0:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
     with out.open("w", encoding="utf-8") as f:
         for r in rows:
             imgs = r.get("images") or []
@@ -62,7 +74,19 @@ def write_calibration_file(out: Path, n: int, train_file: Path) -> Path:
                 if c.get("from") == "human":
                     text = c.get("value", "").replace("<image>", "").strip()
                     break
-            f.write(json.dumps({"image_path": imgs[0], "text": text or "Describe this screenshot."},
+            img_path = imgs[0]
+            if max_side > 0:
+                from PIL import Image
+                src = Path(img_path)
+                dst = cache_dir / f"{src.stem}_{max_side}.png"
+                if not dst.exists():
+                    with Image.open(src) as im:
+                        im = im.convert("RGB")
+                        im.thumbnail((max_side, max_side))
+                        im.save(dst)
+                img_path = str(dst)
+            f.write(json.dumps({"image_path": img_path,
+                                "text": text or "Describe this screenshot."},
                                ensure_ascii=False) + "\n")
     print(f"[量化] 校准集（真实截图）: {out}，{len(rows)} 条")
     return out
@@ -70,18 +94,47 @@ def write_calibration_file(out: Path, n: int, train_file: Path) -> Path:
 
 def quantize_llmcompressor(model: str, out: str, scheme: str, calib: Path,
                            n_calib: int, train_file: Path,
-                           quantize_vision: bool) -> None:
-    calib = write_calibration_file(calib, n_calib, train_file)
+                           quantize_vision: bool,
+                           calib_max_side: int = 1280) -> None:
+    calib = write_calibration_file(calib, n_calib, train_file, calib_max_side)
 
-    ignore = ["lm_head"] if quantize_vision else ["lm_head", "visual.*"]
+    # 序列长度按校准图算，而不是写死：max_side² / 28²（每 28x28 一个图像 token）
+    # + 文本余量。写死会在换数据集/换分辨率时突然报
+    # "Mismatch in image token count ... Likely due to truncation".
+    import math
+    tokens = (calib_max_side ** 2) / 784 if calib_max_side > 0 else 9000
+    max_seq = max(2048, int(math.ceil((tokens + 512) / 1024)) * 1024)
+    print(f"[量化] 校准图长边 {calib_max_side or '原图'}，"
+          f"估计 {int(tokens)} 图像 token → max_seq_length={max_seq}")
+
+    # ignore 名单在**加载模型之后**动态生成，见下方脚本。
+    # 血泪教训：compressed-tensors 的 ignore 只对叶子模块（Linear）逐名匹配，
+    # 写 "visual" / "visual.*" / "re:.*visual.*" 都不会把整棵子树排除，
+    # 视觉塔照样被量化，于是留下 out_features=3420 的层
+    # （Qwen2-VL 视觉 MLP 中间维度），在两个地方炸：
+    #   量化时 "org_w_shape (3420) must be a multiple of group_size (128)"
+    #   服务时 Marlin 内核要求 out_features 能被 64 整除
+    ignore = [] if quantize_vision else ["lm_head"]
     print(f"[量化] ignore 列表: {ignore}"
           f"（{'含视觉塔' if quantize_vision else '跳过视觉塔'}）")
+
+    # per-channel 方案：Ampere 上唯一能被 vLLM 内核吃下的 4bit 权重方案
+    if scheme == "W4A16_channel":
+        scheme = {
+            "W4A16_channel": {
+                "weights": {
+                    "num_bits": 4, "type": "int", "symmetric": True,
+                    "strategy": "channel",
+                },
+            },
+        }
+        print("[量化] 使用 per-channel W4A16（group_size=None，适配 SM86）")
 
     script = f'''
 import json, torch
 from PIL import Image
 from datasets import Dataset
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoModelForImageTextToText
 from llmcompressor import oneshot
 from llmcompressor.modifiers.awq import AWQModifier
 
@@ -89,6 +142,8 @@ MODEL = {model!r}
 OUT = {out!r}
 SCHEME = {scheme!r}
 IGNORE = {ignore!r}
+IGNORE_VISION = {not quantize_vision!r}
+MAX_SEQ = {max_seq}
 
 rows = [json.loads(l) for l in open({str(calib)!r}, encoding="utf-8")]
 proc = AutoProcessor.from_pretrained(MODEL, trust_remote_code=True)
@@ -101,13 +156,80 @@ def _to_ds(r):
     return {{"images": img, "text": text}}
 
 ds = Dataset.from_list([_to_ds(r) for r in rows])
+
+
+def _collate(features):
+    """按模态字段正确拼接，交给 llmcompressor 的默认 collator 会把
+    image_grid_thw 压成 1 维，模型里 `for t, h, w in grid_thw` 直接报
+    "not enough values to unpack (expected 3, got 1)"。
+    """
+    import torch
+    # 只保留模型真正吃的键；其余（如原始 text）丢掉，
+    # 否则下游对 list 调 .dim() 会报 "'list' object has no attribute 'dim'"。
+    keep = ("input_ids", "attention_mask", "pixel_values",
+            "image_grid_thw", "labels", "token_type_ids")
+    out = {{}}
+    for k in keep:
+        vals = [f[k] for f in features if k in f]
+        if not vals:
+            continue
+        if not torch.is_tensor(vals[0]):
+            vals = [torch.tensor(v) for v in vals]
+        if k == "image_grid_thw":
+            out[k] = torch.cat([v.reshape(-1, 3) for v in vals], dim=0)
+        elif k == "pixel_values":
+            out[k] = torch.cat([v.reshape(-1, v.shape[-1]) for v in vals], dim=0)
+        else:
+            # processor 返回的已经是 [1, L]，直接 stack 会变成 [1, 1, L]，
+            # 模型里 attention_mask [1,L] 与 labels [1,1] 对不上，报
+            # "IndexError: The shape of the mask [1, 3072] at index 1
+            #  does not match the shape of the indexed tensor [1, 1]"。
+            v2 = [v.squeeze(0) if (v.dim() > 1 and v.shape[0] == 1) else v
+                  for v in vals]
+            out[k] = (torch.stack(v2, dim=0)
+                      if all(v.shape == v2[0].shape for v in v2)
+                      else torch.cat(v2, dim=0))
+    return out
+
+# 必须自己先用多模态类加载再传实例。
+# 只传路径的话，llmcompressor 内部走 AutoModelForCausalLM，
+# 对 Qwen2_5_VLConfig 直接报 "Unrecognized configuration class"。
+model = AutoModelForImageTextToText.from_pretrained(
+    MODEL, dtype=torch.bfloat16, device_map="cuda:0", trust_remote_code=True)
+
+# 视觉塔要"整棵子树"排除，只能把其中每个 Linear 逐名列出：
+# ignore 只匹配叶子模块名，写容器名（"visual"）不会向下传播。
+if IGNORE_VISION:
+    base = [n for n, m in model.named_modules()
+            if isinstance(m, torch.nn.Linear) and "visual" in n.split(".")]
+    # 同时给出带与不带 "model." 前缀的两种写法：
+    # named_modules() 给的是 model.visual.blocks.0.mlp.gate_proj，
+    # 而 safetensors 里的键是 visual.blocks.0.mlp.gate_proj，
+    # compressed-tensors 匹配的是后者。
+    vision_linears = base + [n[len("model."):] for n in base
+                             if n.startswith("model.")]
+    IGNORE = IGNORE + vision_linears
+    print("[量化] 排除视觉塔 Linear 数 =", len(vision_linears))
+
+# recipe 必须在 IGNORE 定稿之后创建，否则拿到的是旧列表
+# SCHEME 可以是预设名（"W4A16"，group_size=128），也可以传 dict。
+# Ampere(3090, SM86) 上必须走 per-channel：
+#   - Machete 内核要 SM90；
+#   - AllSpark 在 Ampere 只支持 group_size=-1（per-channel）；
+#   - Marlin 要求 out_features 能被 64 整除，而视觉 MLP 的 3420 不满足；
+#   - BitBLAS 要额外安装。
+# 用 group_size=128 的 W4A16 会得到"能量化成功、但 vLLM 加载不了"的产物。
 recipe = AWQModifier(ignore=IGNORE, scheme=SCHEME, targets=["Linear"])
 
 oneshot(
-    model=MODEL, dataset=ds, recipe=recipe,
-    output_dir=OUT, max_seq_length=2048,
+    model=model, dataset=ds, recipe=recipe,
+    # 校准图是真实 GUI 截图（ShowUI-desktop 多为 3360x2100 / 2880x1800），
+    # 按默认 max_pixels 不缩放，实测单图就有 **9000 个图像 token**。
+    # 给 2048 或 8192 都会被截断，报
+    # "Mismatch in image token count ... Likely due to truncation='max_length'"。
+    output_dir=OUT, max_seq_length=MAX_SEQ,
     num_calibration_samples=len(rows),
-    trust_remote_code_model=True,
+    data_collator=_collate,
 )
 print("QUANT_DONE", OUT)
 '''
@@ -121,6 +243,8 @@ def main() -> None:
     ap.add_argument("--scheme", default="W4A16", help="W4A16(AWQ) / W8A8(INT8)")
     ap.add_argument("--num-calib", type=int, default=256)
     ap.add_argument("--train-file", default=str(TRAIN_DEFAULT))
+    ap.add_argument("--calib-max-side", type=int, default=1280,
+                    help="校准图长边（0=用原图，3360x2100 会让校准慢 5 倍）")
     ap.add_argument("--quantize-vision", action="store_true",
                     help="连视觉塔一起量化（对照实验用，默认跳过）")
     args = ap.parse_args()
@@ -129,6 +253,7 @@ def main() -> None:
         args.model, args.out, args.scheme,
         Path(CALIB_DEFAULT), args.num_calib,
         Path(args.train_file), args.quantize_vision,
+        args.calib_max_side,
     )
     tag = "含视觉塔" if args.quantize_vision else "跳过视觉塔"
     print(f"\n[完成] {args.out}（{tag}）")

@@ -48,8 +48,17 @@ def _expand_env(node):
 
 
 def build_cmd(cfg: dict, extra: list[str] | None = None) -> list[str]:
-    """把 YAML 翻译成 vllm serve 的参数向量。"""
-    cmd = ["vllm", "serve", str(cfg["model"])]
+    """把 YAML 翻译成 vllm serve 的参数向量。
+
+    用 `当前解释器 -m vllm.entrypoints.openai.api_server` 而不是裸 `vllm`：
+    后者要求 venv 的 bin 在 PATH 上，而通过 ssh 非交互执行时 PATH 往往没有它
+    （实测报 `FileNotFoundError: 'vllm'`）。用 sys.executable 则一定指向
+    装了这个包的那个解释器。
+    """
+    # 注意 api_server 用 --model 传模型（`vllm serve` 才是位置参数），
+    # 混用会报 unrecognized arguments。
+    cmd = [sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+           "--model", str(cfg["model"])]
 
     mapping = {
         "served_model_name": "--served-model-name",

@@ -176,6 +176,77 @@ def build_train(roots: list[Path], out: Path, max_per_image: int,
     return len(rows)
 
 
+def build_train_from_parquet(root: Path, img_dir: Path, max_per_image: int,
+                             limit: int) -> list[dict]:
+    """从 parquet 里构造训练集。
+
+    为什么必须支持 parquet：ShowUI-desktop-8K 的**完整数据在 data/*.parquet**
+    （本项目实测 34 个文件、约 7500 条，图像以 bytes 内嵌），而仓库自带的
+    `metadata/hf_train.json` 只覆盖 101 张图。只读元数据会得到 303 条
+    = 完整量的 4%，实测用这份数据微调会把零样本 80% 的定位能力训到 10~25%
+    —— 数据量不足时，LoRA 学到的主要是噪声。
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        log("  !! 未安装 pyarrow，跳过 parquet（pip install pyarrow）")
+        return []
+
+    from vfs.grounding import PROMPT_TEMPLATE  # 与评测共用同一 prompt
+
+    files = sorted(root.rglob("*.parquet"))
+    if not files:
+        return []
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict] = []
+    per_img: dict[str, int] = {}
+    for f in files:
+        pf = pq.ParquetFile(f)
+        for batch in pf.iter_batches(batch_size=64):
+            for r in batch.to_pylist():
+                if limit and len(rows) >= limit:
+                    return rows
+                key = r.get("image_url") or f"{f.stem}-{len(rows)}"
+                if per_img.get(key, 0) >= max_per_image:
+                    continue
+                pt = r.get("point")
+                if not pt or len(pt) != 2:
+                    continue
+
+                ip = img_dir / key.replace("/", "_")
+                if not ip.exists():
+                    blob = (r.get("image") or {}).get("bytes")
+                    if not blob:
+                        continue
+                    ip.write_bytes(blob)
+                # 图像尺寸只为把像素坐标折算成 [0,1000] 用；
+                # parquet 里的 point 已是 [0,1] 归一化，多数情况不需要尺寸。
+                iw = ih = 0
+                if max(float(pt[0]), float(pt[1])) > 1.5:
+                    try:
+                        from PIL import Image
+                        with Image.open(ip) as im:
+                            iw, ih = im.size
+                    except Exception:
+                        continue
+                gx, gy = to_1000(pt, iw, ih)
+                rows.append({
+                    "id": f"{root.name}-pq-{len(rows)}",
+                    "images": [str(ip.resolve())],
+                    "conversations": [
+                        {"from": "human",
+                         "value": "<image>\n" + PROMPT_TEMPLATE.format(
+                             instruction=r.get("instruction", ""))},
+                        {"from": "gpt",
+                         "value": json.dumps({"point": [gx, gy]})},
+                    ],
+                })
+                per_img[key] = per_img.get(key, 0) + 1
+    log(f"  {root.name} (parquet): +{len(rows)} 条，图片落在 {img_dir}")
+    return rows
+
+
 def write_dataset_info(train_file: Path) -> None:
     info = {
         "gui_grounding_train": {
@@ -236,6 +307,14 @@ def main() -> None:
                     help="额外下 AMEX（约 87 GB，需确认磁盘够）")
     ap.add_argument("--with-pro", action="store_true",
                     help="额外下 ScreenSpot-Pro（约 1.6 GB，高分辨率更难）")
+    ap.add_argument("--parquet", action="store_true",
+                    help="从 data/*.parquet 构建训练集（完整数据约 7.5k 条；"
+                         "只读元数据只有 303 条 = 4%，微调会退化）")
+    ap.add_argument("--parquet-limit", type=int, default=0,
+                    help="parquet 最多取多少条（0=全部）。注意图片要落盘，"
+                         "约 1.4MB/张，2000 条约 2.8GB")
+    ap.add_argument("--img-dir", default="data/train_images",
+                    help="parquet 内嵌图片的解包目录")
     ap.add_argument("--skip-download", action="store_true")
     args = ap.parse_args()
 
@@ -269,7 +348,23 @@ def main() -> None:
     if args.with_amex:
         train_roots.append(raw / "AMEX")
     train_file = base / "train" / "gui_grounding_train.json"
-    n = build_train(train_roots, train_file, args.max_per_image, args.limit)
+    n = 0
+    if args.parquet:
+        # 优先用 parquet（完整数据），失败再回退到元数据解析
+        rows = build_train_from_parquet(
+            raw / "ShowUI-desktop", Path(args.img_dir),
+            args.max_per_image, args.parquet_limit)
+        if rows:
+            train_file.parent.mkdir(parents=True, exist_ok=True)
+            with train_file.open("w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            n = len(rows)
+            log(f"训练集 -> {train_file}（{n} 条，来自 parquet）")
+        else:
+            log("  !! parquet 未产出样本，回退到元数据解析")
+    if not n:
+        n = build_train(train_roots, train_file, args.max_per_image, args.limit)
     if n == 0:
         log("!! 训练集为空。常见原因：")
         log("   1) 下载失败 —— 换 --endpoint 重试")
