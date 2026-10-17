@@ -21,6 +21,11 @@ max_model_len: 16384
 gpu_memory_utilization: 0.90
 limit_mm_per_prompt: '{"image":1,"video":0}'
 enable_prefix_caching: false
-enforce_eager: false
+# 必须 enforce_eager: true。
+# 3109/3090 这套驱动(550)+triton 组合下，torch.compile 在量化模型上会进
+# inductor 的 triton_heuristics 自动调优并 "CUDA error: illegal memory access"。
+# 代价是失去 CUDA Graph（速度略降），但精度评测不受影响；
+# 如果之后要做速度对比，应把 BF16 档位也设成同样的 enforce_eager 再比。
+enforce_eager: true
 
 port: 8000

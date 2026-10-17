@@ -155,6 +155,9 @@ dump 原始输出后发现**两类完全不同的东西被混为一谈**：
 | 22 | `serve.py` 报 `FileNotFoundError: 'vllm'` | 构造命令时用的是裸 `vllm`，要求 venv/bin 在 PATH 上；ssh 非交互执行时没有 | 改成 `sys.executable -m vllm.entrypoints.openai.api_server` |
 | 23 | 改完又报 `api_server.py: error: unrecognized arguments: <模型路径>` | `vllm serve` 收位置参数，`api_server` 要 `--model` | 用 `--model <路径>` |
 | 24 | 停掉 vLLM 后显存仍占 20GB，`ps` 里却找不到 | 残留的是 `python -c from multiprocessing.spawn import spawn_main`——命令行里既没有 `vllm` 也没有 `api_server`，所有常见 pkill 模式都打不中 | `ps -eo pid,rss,cmd --sort=-rss \| head` 按内存排序找它，按 PID kill。**别用 `pkill -f xxx` 且命令串里含 xxx，会杀掉自己**（已在第 5 条踩过） |
+| 25 | 视觉塔明明没被量化，vLLM 却报 `Marlin: output_size_per_partition = 3420 not divisible by min_thread_n = 64` | **llmcompressor 把 ignore 写成模块路径 `model.visual.*`，而 safetensors 的键是 `visual.*`（无 `model.` 前缀）**，vLLM 按后者匹配 → 一条没命中 → 误判视觉塔也被量化 | 改 AWQ 产物 `config.json` 的 `quantization_config.ignore`，给每条 `model.visual.X` 补一份 `visual.X`（两种都留）。**无需重新量化** |
+| 26 | 装 bitblas 后启动崩溃 `CUDA error: illegal memory access`，栈在 `triton_heuristics.benchmark_all_configs` | vLLM 优先选 BitBLAS 内核对量化层自动调优，本机（driver 550 + 该版 triton）下调优内核非法访存 | 卸载 bitblas 回落到 **Marlin**（前提是第 25 条已修）。3090 上别指望 BitBLAS |
+| 27 | Marlin 已选中，仍在 inductor/triton 自动调优处 `illegal memory access` | torch.compile 在量化模型上触发新编译内核，本机 triton 自动调优不稳 | 该档位设 `enforce_eager: true`（放弃 CUDA Graph）。**做速度对比时 BF16 档也要同样设置**，否则不是同一把尺 |
 
 ---
 
