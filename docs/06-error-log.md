@@ -158,6 +158,9 @@ dump 原始输出后发现**两类完全不同的东西被混为一谈**：
 | 25 | 视觉塔明明没被量化，vLLM 却报 `Marlin: output_size_per_partition = 3420 not divisible by min_thread_n = 64` | **llmcompressor 把 ignore 写成模块路径 `model.visual.*`，而 safetensors 的键是 `visual.*`（无 `model.` 前缀）**，vLLM 按后者匹配 → 一条没命中 → 误判视觉塔也被量化 | 改 AWQ 产物 `config.json` 的 `quantization_config.ignore`，给每条 `model.visual.X` 补一份 `visual.X`（两种都留）。**无需重新量化** |
 | 26 | 装 bitblas 后启动崩溃 `CUDA error: illegal memory access`，栈在 `triton_heuristics.benchmark_all_configs` | vLLM 优先选 BitBLAS 内核对量化层自动调优，本机（driver 550 + 该版 triton）下调优内核非法访存 | 卸载 bitblas 回落到 **Marlin**（前提是第 25 条已修）。3090 上别指望 BitBLAS |
 | 27 | Marlin 已选中，仍在 inductor/triton 自动调优处 `illegal memory access` | torch.compile 在量化模型上触发新编译内核，本机 triton 自动调优不稳 | 该档位设 `enforce_eager: true`（放弃 CUDA Graph）。**做速度对比时 BF16 档也要同样设置**，否则不是同一把尺 |
+| 28 | 压测 **39/64 请求失败**，但服务端零报错 | **两个 vLLM 服务同时监听 8000**（SO_REUSEPORT），请求被分流，一半打到旧服务上 → 间歇 `404 The model ... does not exist` | 杀干净再测：`ps aux \| grep api_server \| awk '{print $2}' \| xargs kill -9`。**别用 RSS 阈值猜**（我因此漏杀过一次，白跑一轮压测） |
+| 29 | `ValueError: No available memory for the cache blocks` | BF16 在 `gpu_memory_utilization=0.45`（10.8GB）下，7.1GB 权重 + 激活已把池占满，排不出 KV cache | AWQ（3.2GB 权重）在同预算下能正常起服务，实测占 8.7 GiB —— 这正是量化的真实收益 |
+| 30 | vLLM 杀掉后显存仍被占 10.9GB，`ps` 里却找不到进程 | 共享卡容器里的僵尸进程：PID 在 nvidia-smi 里存在但 `ps` 看不到，父进程已退出又没人 reap | 重启容器才能彻底回收。写测试脚本时先 `nvidia-smi --query-compute-apps=pid` 确认，别只看 `ps` |
 
 ---
 
