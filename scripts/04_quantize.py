@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -131,7 +132,7 @@ def quantize_llmcompressor(model: str, out: str, scheme: str, calib: Path,
         print("[量化] 使用 per-channel W4A16（group_size=None，适配 SM86）")
 
     script = f'''
-import json, torch
+import json, os, torch
 from PIL import Image
 from datasets import Dataset
 from transformers import AutoProcessor, AutoModelForImageTextToText
@@ -232,18 +233,61 @@ oneshot(
     data_collator=_collate,
 )
 print("QUANT_DONE", OUT)
+
+# ---------------------------------------------------------------------------
+# 必须做的收尾：修 ignore 命名，否则 vLLM 加载不了这个产物。
+#
+# llmcompressor 把 ignore 写成**模块路径** `model.visual.blocks.0.mlp.gate_proj`，
+# 而 safetensors 里的键是 `visual.blocks.0.mlp.gate_proj`（没有 `model.` 前缀）。
+# vLLM 按权重键匹配 ignore，于是一条都没命中 → 它以为视觉塔也被量化了 →
+# 去找 WNA16 内核 → 视觉 MLP 是 3420 维，Marlin 要求能被 64 整除 → 直接报错：
+#   "Weight output_size_per_partition = 3420 is not divisible by min_thread_n = 64"
+#
+# 这一步原本是手工改 config.json 的，漏掉它量化产物就起不来，
+# 所以固化进脚本。详见 docs/06-error-log.md 第 25 条。
+# ---------------------------------------------------------------------------
+import shutil
+
+cfg_path = os.path.join(OUT, "config.json")
+if os.path.exists(cfg_path):
+    shutil.copy(cfg_path, cfg_path + ".bak")
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    qc = cfg.get("quantization_config") or {{}}
+    old = qc.get("ignore") or []
+    fixed = set(old)
+    for n in old:
+        if n.startswith("model."):
+            fixed.add(n[len("model."):])
+    if fixed != set(old):
+        qc["ignore"] = sorted(fixed)
+        cfg["quantization_config"] = qc
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print(f"[修复] ignore 命名：{{len(old)}} -> {{len(fixed)}} 条"
+              f"（同时保留带/不带 model. 前缀两种写法）")
+    else:
+        print("[修复] ignore 无需改动")
+else:
+    print("!! 没找到 config.json，跳过 ignore 修复")
 '''
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="模型离线量化（AWQ）")
-    ap.add_argument("--model", default="outputs/qwen25vl-3b-gui-sft-merged")
-    ap.add_argument("--out", default="outputs/qwen25vl-3b-gui-sft-merged-awq")
+    # 默认量化**基座**而不是 SFT 产物：报告里的 AWQ 一档量化的是基座，
+    # 这样"量化损失"才是相对同一起点度量的（见 docs/07-results.md 第 3 节）。
+    ap.add_argument("--model",
+                    default=os.environ.get("MODEL_DIR", "models")
+                    + "/Qwen2.5-VL-3B-Instruct",
+                    help="要量化的模型目录（默认取 $MODEL_DIR/Qwen2.5-VL-3B-Instruct）")
+    ap.add_argument("--out", default="outputs/qwen25vl-3b-base-awq")
     ap.add_argument("--scheme", default="W4A16", help="W4A16(AWQ) / W8A8(INT8)")
-    ap.add_argument("--num-calib", type=int, default=256)
+    ap.add_argument("--num-calib", type=int, default=32,
+                    help="校准样本数（256 条会让校准慢一个数量级，32 条足够）")
     ap.add_argument("--train-file", default=str(TRAIN_DEFAULT))
-    ap.add_argument("--calib-max-side", type=int, default=1280,
+    ap.add_argument("--calib-max-side", type=int, default=768,
                     help="校准图长边（0=用原图，3360x2100 会让校准慢 5 倍）")
     ap.add_argument("--quantize-vision", action="store_true",
                     help="连视觉塔一起量化（对照实验用，默认跳过）")

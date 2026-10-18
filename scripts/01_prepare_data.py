@@ -73,6 +73,35 @@ def _hub():
         )
 
 
+def fetch_web_subset(mb: int, dest: Path, endpoint: str) -> bool:
+    """用 HTTP Range 只取 ShowUI-web 图像包的前 mb MB，再解压。
+
+    完整 images.tar.gz 有 43GB，全量下载不划算。tar 是顺序存储的，
+    被截断的文件照样能解出其中完整的成员 —— 实测取前 1.5GB（约 65 秒）
+    就能拿到 1375 张网页截图，足够补"底图多样性"。
+
+    只在 Linux/macOS 下可用（依赖 curl 与 tar）。
+    """
+    import subprocess
+
+    dest.mkdir(parents=True, exist_ok=True)
+    part = dest / "images_part.tar.gz"
+    url = f"{endpoint}/datasets/showlab/ShowUI-web/resolve/main/images.tar.gz"
+    nbytes = mb * 1024 * 1024 - 1
+    log(f"  [web] Range 下载前 {mb} MB: {url}")
+    r = subprocess.run(["curl", "-sL", "-r", f"0-{nbytes}", "-o", str(part), url])
+    if r.returncode != 0 or not part.exists() or part.stat().st_size == 0:
+        log("  !! Range 下载失败")
+        return False
+    log(f"  [web] 下载完成 {part.stat().st_size/1e6:.0f} MB，开始解压")
+    # 截断的 tar 解到末尾会报错，但完整成员都已落盘，所以忽略退出码
+    subprocess.run(["tar", "-xzf", str(part), "-C", str(dest)],
+                   capture_output=True)
+    n = len(list((dest / "images").rglob("*.png"))) if (dest / "images").exists() else 0
+    log(f"  [web] 解出 {n} 张截图到 {dest/'images'}")
+    return n > 0
+
+
 def download(repo_id: str, local_dir: Path, endpoint: str) -> bool:
     os.environ["HF_ENDPOINT"] = endpoint
     snapshot_download = _hub()
@@ -371,6 +400,11 @@ def main() -> None:
     ap.add_argument("--web-root", default="",
                     help="ShowUI-web 的根目录（内含 images/），用于补网页多样性")
     ap.add_argument("--web-limit", type=int, default=0, help="网页样本上限")
+    ap.add_argument("--web-fetch-mb", type=int, default=0,
+                    help=">0 时先用 HTTP Range 下载 ShowUI-web 图像包的前 N MB "
+                         "并解压到 --web-dir，再纳入训练（复现 v4 用）")
+    ap.add_argument("--web-dir", default="data/ShowUI-web",
+                    help="--web-fetch-mb 的解压目标目录")
     ap.add_argument("--skip-download", action="store_true")
     args = ap.parse_args()
 
@@ -422,10 +456,15 @@ def main() -> None:
     # 网页数据：ShowUI-web 的图在 43GB 的 images.tar.gz 里，用 HTTP Range
     # 只取前一段再解压即可，不必下全量。这是补"底图多样性"的关键来源 ——
     # desktop 只有 101 张截图，而评测里 mobile+web 占 74%。
-    if args.web_root:
-        web_rows = build_train([Path(args.web_root)], None,
+    web_root = args.web_root
+    if args.web_fetch_mb and not web_root:
+        web_root = args.web_dir
+        if not fetch_web_subset(args.web_fetch_mb, Path(web_root), args.endpoint):
+            web_root = ""
+    if web_root:
+        web_rows = build_train([Path(web_root)], None,
                                args.max_per_image, args.web_limit)
-        log(f"  + 网页数据 {len(web_rows)} 条（来自 {args.web_root}）")
+        log(f"  + 网页数据 {len(web_rows)} 条（来自 {web_root}）")
         all_rows = all_rows + web_rows
 
     n = len(all_rows)

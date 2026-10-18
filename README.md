@@ -111,6 +111,35 @@ make pipeline     # data → train → merge → quantize → scan → report
 
 ---
 
+## 复现报告中的数字
+
+下表每个数字都对应一条**已验证可跑通**的命令。参数是调试出来的，改默认值会得到
+不同结果（尤其数据预处理那一环，见 `make data` 上方的注释）。
+
+| 报告里的数字 | 复现命令 | 预期 |
+|---|---|---|
+| BF16 零样本 80.0% | `make serve-bf16` 后 `make eval` | 80.0%（保守 79.0%） |
+| SFT v3 = 62.7% | `make data && make train && make merge` 后评测 | 62.7%，p50 61.7px |
+| SFT v4 = 59.4% | `make data-web && make train && make merge` 后评测 | 59.4% |
+| AWQ 16.8% | `make quantize` 后用 `configs/serve/awq_base.yaml` 起服务评测 | 16.8%（1.6M px 口径） |
+| 速度/显存 | 起服务后 `make bench` | TTFT p50 ≈1.1s，吞吐 ≈44.8 tok/s |
+
+**必须先满足的两条硬性前提**，否则数字一定对不上：
+
+1. **评测必须显式加 `--coord-space pixel`**。基座原生输出绝对像素，
+   而 `auto` 会把 desktop 上常见的 923 这类值误判成 [0,1000] 归一化，
+   准确率直接掉 20+ 个点（`docs/06-error-log.md` 第 4 条）。
+2. **AWQ 产物必须过一遍 ignore 命名修复**。llmcompressor 把 ignore 写成
+   `model.visual.*`，而权重键是 `visual.*`，vLLM 一条都匹配不上，会误判
+   视觉塔被量化并拒绝加载。`make quantize` 已内置该修复，
+   也可单独跑 `python scripts/fix_awq_ignore.py <模型目录>` 自检。
+
+> **已知局限**：AWQ 档位受 vLLM 0.8.5 的 dummy-input profiling 限制，
+> 只能把 `max_pixels` 钉在约 1.6M 才能起服务，因此量化精度对比是在该口径下
+> 做的，无法与原分辨率的 BF16 直接相比。详见 [docs/07-results.md](docs/07-results.md) 第 3.3 节。
+
+---
+
 ## 目录结构
 
 ```

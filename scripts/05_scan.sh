@@ -10,12 +10,17 @@
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"       # 云端传 venv 里的绝对路径
-VARIANTS="${VARIANTS:-bf16 awq_int4 fp8}"
+VARIANTS="${VARIANTS:-bf16 awq_int4}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 NUM_REQUESTS="${NUM_REQUESTS:-64}"
 CONCURRENCY="${CONCURRENCY:-4}"
 MAX_TOKENS="${MAX_TOKENS:-32}"
 PORT="${PORT:-8000}"
+# 坐标口径必须显式给 pixel。
+# 踩过：默认 auto 会把模型输出的绝对像素误判成 [0,1000] 归一化
+# （因为 desktop 上常见 923 这种小于 1000 的值），准确率直接掉 20+ 个点。
+# 实测 Qwen2.5-VL-3B 原生输出绝对像素，所以固定用 pixel。
+COORD_SPACE="${COORD_SPACE:-pixel}"
 BASE_URL="http://127.0.0.1:${PORT}"
 
 mkdir -p results logs
@@ -84,7 +89,7 @@ for variant in $VARIANTS; do
       --data-dir data/eval/ScreenSpot \
       --limit "${EVAL_LIMIT}" \
       --tag "${variant}" \
-      --coord-space auto \
+      --coord-space "${COORD_SPACE}" \
       --out-dir results || echo "    !! 评测失败（见上）"
 
   echo "    -> 速度压测（并发 ${CONCURRENCY}）"
