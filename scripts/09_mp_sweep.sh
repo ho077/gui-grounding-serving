@@ -137,13 +137,18 @@ run_case() {
     kill_server
   fi
 
-  if [ ${#qargs[@]} -gt 0 ]; then
+  if [ ${#qargs[@]} -gt 0 ] && [ ! -f "$dir/config.json" ]; then
     echo "[1/3] 量化 -> $dir"
     "$TRAIN_VENV" scripts/08_mixed_precision.py \
       --model "$MODEL" --out "$dir" --tag "$name" "${qargs[@]}" \
-      2>&1 | grep -E "^\[(结构|档位|位宽|profile|量化)\]|Traceback|Error" || true
+      2>&1 | grep -E "^\[(结构|档位|位宽|profile|量化|口径)\]|Traceback|Error" || true
   else
-    echo "[1/3] 跳过量化（复用现有产物 $dir）"
+    echo "[1/3] 跳过量化（复用已有产物 $dir）"
+    # 已量化的老产物也要过一遍 ignore 命名修复（混合位宽档必须：
+    # 否则 vLLM 会把保 FP16 的层建成 packed 参数，加载 KeyError）
+    if [ ${#qargs[@]} -gt 0 ]; then
+      "$TRAIN_VENV" scripts/fix_awq_ignore.py "$dir" 2>&1 | tail -4 || true
+    fi
   fi
 
   kill_server
