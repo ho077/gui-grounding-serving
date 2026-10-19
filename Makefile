@@ -1,4 +1,5 @@
-.PHONY: help install hardware data data-web train merge quantize scan serve-bf16 serve-awq bench eval report test clean
+.PHONY: help install hardware data data-web train merge quantize scan serve-bf16 serve-awq \
+        bench eval report ladder jedi-eval test clean
 
 PYTHON ?= python
 # 基座权重所在目录（与 configs/serve/*.yaml、configs/sft/*.yaml 里的 ${MODEL_DIR} 同一套约定）
@@ -20,6 +21,8 @@ help:
 	@echo "    make quantize    AWQ 量化（默认跳过视觉塔）"
 	@echo "    make scan        全档位扫描：起服务 → 测精度 → 测速度"
 	@echo "    make report      汇总 results/ 并回填 README 表格"
+	@echo "    make ladder      分辨率阶梯 + 同口径 4bit 对比（口径订正后的主实验）"
+	@echo "    make jedi-eval   Jedi-3B 官方协议评测"
 	@echo "    make test        冒烟测试：校验评测与压测的计时/判定逻辑"
 	@echo "    make pipeline    data → train → merge → quantize → scan → report"
 	@echo ""
@@ -90,6 +93,16 @@ eval:
 	$(PYTHON) -m vfs.grounding --base-url http://127.0.0.1:8000 \
 		--model $(BENCH_MODEL) --data-dir data/eval/ScreenSpot \
 		--coord-space pixel --tag eval
+
+ladder:
+	@# 分辨率阶梯 + 同口径 4bit 对比。所有涉及"压分辨率/压比特"的结论都出自这里，
+	@# 因为它保证三件事同源：客户端缩放、GT 同比缩放、坐标按 pixel 解释。
+	@# 缺一项就退化成 2026-10-19 那次口径污染（docs/07-results.md §11）。
+	VENV=$(PYTHON) MODEL_DIR=$(MODEL_DIR) AWQ_DIR=$(AWQ_DIR) bash scripts/06_ladder.sh
+
+jedi-eval:
+	@# Jedi-3B 全量评测，走官方 ComputerUse 协议（src/vfs/jedi_eval.py）。
+	VENV=$(PYTHON) bash scripts/07_jedi_eval.sh
 
 report:
 	$(PYTHON) -m vfs.report --results-dir results

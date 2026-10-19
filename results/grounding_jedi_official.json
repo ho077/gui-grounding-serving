@@ -1,0 +1,76 @@
+{
+  "tag": "jedi_official",
+  "overall": {
+    "n": 1270,
+    "accuracy": 0.8205,
+    "offset_p50": 8.64,
+    "offset_p90": 307.78,
+    "accuracy_strict": 0.8192
+  },
+  "by_platform": {
+    "desktop": {
+      "n": 333,
+      "accuracy": 0.8018,
+      "offset_p50": 8.66,
+      "offset_p90": 240.81
+    },
+    "mobile": {
+      "n": 501,
+      "accuracy": 0.8164,
+      "offset_p50": 13.38,
+      "offset_p90": 395.33
+    },
+    "web": {
+      "n": 436,
+      "accuracy": 0.8394,
+      "offset_p50": 4.04,
+      "offset_p90": 188.55
+    }
+  },
+  "by_instruction_type": {
+    "icon": {
+      "n": 573,
+      "accuracy": 0.7435,
+      "offset_p50": 5.91,
+      "offset_p90": 435.51
+    },
+    "text": {
+      "n": 697,
+      "accuracy": 0.8838,
+      "offset_p50": 11.11,
+      "offset_p90": 238.48
+    }
+  },
+  "by_area_bucket": {
+    "xs  (<500px²)": {
+      "n": 2,
+      "accuracy": 1.0,
+      "offset_p50": 3.37,
+      "offset_p90": 4.64
+    },
+    "s   (0.5k-2k)": {
+      "n": 106,
+      "accuracy": 0.6604,
+      "offset_p50": 2.92,
+      "offset_p90": 269.67
+    },
+    "m   (2k-8k)": {
+      "n": 394,
+      "accuracy": 0.7893,
+      "offset_p50": 3.09,
+      "offset_p90": 235.15
+    },
+    "l   (>8k)": {
+      "n": 768,
+      "accuracy": 0.8581,
+      "offset_p50": 14.07,
+      "offset_p90": 315.77
+    }
+  },
+  "parse_failures": 2,
+  "refusals": 0,
+  "n_total": 1272,
+  "failure_breakdown": {
+    "parse": 2
+  }
+}

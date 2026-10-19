@@ -298,8 +298,33 @@ def _screenspot_files(data_dir: Path) -> list[tuple[Path, str]]:
     return []
 
 
-def load_screenspot(data_dir: Path, limit: int = 0) -> list[Sample]:
-    """加载 ScreenSpot 评测集（1272 条 = mobile 502 + web 436 + desktop 334）。"""
+def _b64_resized(path: Path, max_side: int) -> tuple[str, int, int]:
+    """读图并按 max_side 限制长边，返回 (base64, 新宽, 新高)。
+
+    为什么需要它：某些 checkpoint（如 Jedi-3B）在 vLLM 0.8.5 上喂大图会让引擎
+    卡死甚至崩溃（见 docs/06-error-log.md）。客户端先把图降到中等尺寸，
+    同时把 GT bbox 等比缩放，就能在**同等输入条件**下做档位间对比。
+    """
+    from PIL import Image
+
+    with Image.open(path) as im0:
+        im = im0.convert("RGB")
+        w, h = im.size
+        if max_side and max(w, h) > max_side:
+            f = max_side / max(w, h)
+            im = im.resize((max(1, int(w * f)), max(1, int(h * f))))
+            w, h = im.size
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode(), w, h
+
+
+def load_screenspot(data_dir: Path, limit: int = 0,
+                    max_side: int = 0) -> list[Sample]:
+    """加载 ScreenSpot 评测集（1272 条 = mobile 502 + web 436 + desktop 334）。
+
+    max_side > 0 时在客户端把图缩到该长边，bbox 同比缩放（见 _b64_resized）。
+    """
     files = _screenspot_files(data_dir)
     buckets: list[list[Sample]] = []
     for meta, default_platform in files:
@@ -326,11 +351,22 @@ def load_screenspot(data_dir: Path, limit: int = 0) -> list[Sample]:
                 iw, ih = _image_size(img_path)
             except Exception:
                 continue
+            # bbox 的 xywh/xyxy/归一化判定必须用**原始**分辨率：
+            # 若拿缩放后的 nw/nh 去判，x+w 会超出新边界而被误判成 xyxy，
+            # 整份标注作废（Jedi 档 acc 一度只有 11%，根因就在这里）。
+            box = _xywh_to_xyxy(bbox, iw, ih)
+            if max_side:
+                img_b64, nw, nh = _b64_resized(img_path, max_side)
+            else:
+                img_b64, nw, nh = _b64_of(img_path), iw, ih
+            if (nw, nh) != (iw, ih):          # 图被缩过 -> bbox 同比缩放
+                fx, fy = nw / iw, nh / ih
+                box = [box[0] * fx, box[1] * fy, box[2] * fx, box[3] * fy]
             samples.append(Sample(
-                img_b64=_b64_of(img_path),
-                img_w=iw, img_h=ih,
+                img_b64=img_b64,
+                img_w=nw, img_h=nh,
                 instruction=row.get("instruction") or row.get("task") or "",
-                bbox=_xywh_to_xyxy(bbox, iw, ih),
+                bbox=box,
                 platform=row.get("split") or default_platform or "unknown",
                 inst_type=row.get("data_type", "unknown"),
                 source=meta.stem,
@@ -507,6 +543,8 @@ def main() -> None:
     ap.add_argument("--data-dir", default="data/eval/ScreenSpot")
     ap.add_argument("--tag", default="run")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--max-side", type=int, default=0,
+                    help="客户端把图缩到该长边再送（bbox 同比缩放），用于某些在大图上会让 vLLM 引擎卡死的 checkpoint")
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--coord-space", choices=("auto", "pixel", "norm"),
@@ -521,7 +559,7 @@ def main() -> None:
     if not d.exists():
         raise SystemExit(f"评测集不存在: {d}\n先跑 scripts/01_prepare_data.py")
 
-    samples = load_screenspot(d, args.limit)
+    samples = load_screenspot(d, args.limit, args.max_side)
     if not samples:
         raise SystemExit(f"未加载到样本，检查目录结构: {d}")
     print(f"[评测] {d} -> {len(samples)} 条")

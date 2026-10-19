@@ -1,0 +1,77 @@
+{
+  "tag": "awq_side1512",
+  "overall": {
+    "n": 1233,
+    "accuracy": 0.6634,
+    "offset_p50": 50.67,
+    "offset_p90": 399.32,
+    "accuracy_strict": 0.6431
+  },
+  "by_platform": {
+    "desktop": {
+      "n": 323,
+      "accuracy": 0.5294,
+      "offset_p50": 93.16,
+      "offset_p90": 502.25
+    },
+    "mobile": {
+      "n": 489,
+      "accuracy": 0.7505,
+      "offset_p50": 40.08,
+      "offset_p90": 360.63
+    },
+    "web": {
+      "n": 421,
+      "accuracy": 0.6651,
+      "offset_p50": 29.7,
+      "offset_p90": 361.35
+    }
+  },
+  "by_instruction_type": {
+    "icon": {
+      "n": 553,
+      "accuracy": 0.5624,
+      "offset_p50": 40.67,
+      "offset_p90": 561.51
+    },
+    "text": {
+      "n": 680,
+      "accuracy": 0.7456,
+      "offset_p50": 57.37,
+      "offset_p90": 262.15
+    }
+  },
+  "by_area_bucket": {
+    "xs  (<500px²)": {
+      "n": 5,
+      "accuracy": 0.2,
+      "offset_p50": 59.97,
+      "offset_p90": 333.02
+    },
+    "s   (0.5k-2k)": {
+      "n": 135,
+      "accuracy": 0.3333,
+      "offset_p50": 88.41,
+      "offset_p90": 604.27
+    },
+    "m   (2k-8k)": {
+      "n": 469,
+      "accuracy": 0.6269,
+      "offset_p50": 13.51,
+      "offset_p90": 477.63
+    },
+    "l   (>8k)": {
+      "n": 624,
+      "accuracy": 0.766,
+      "offset_p50": 72.29,
+      "offset_p90": 309.07
+    }
+  },
+  "parse_failures": 21,
+  "refusals": 18,
+  "n_total": 1272,
+  "failure_breakdown": {
+    "parse": 21,
+    "refusal": 18
+  }
+}

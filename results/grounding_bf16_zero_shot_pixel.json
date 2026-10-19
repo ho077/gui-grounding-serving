@@ -1,0 +1,70 @@
+{
+  "tag": "bf16_zero_shot_pixel",
+  "overall": {
+    "n": 1060,
+    "accuracy": 0.8104,
+    "offset_p50": 24.19,
+    "offset_p90": 339.0
+  },
+  "by_platform": {
+    "desktop": {
+      "n": 312,
+      "accuracy": 0.7821,
+      "offset_p50": 23.05,
+      "offset_p90": 236.53
+    },
+    "mobile": {
+      "n": 490,
+      "accuracy": 0.8531,
+      "offset_p50": 25.16,
+      "offset_p90": 328.01
+    },
+    "web": {
+      "n": 258,
+      "accuracy": 0.7636,
+      "offset_p50": 23.02,
+      "offset_p90": 449.71
+    }
+  },
+  "by_instruction_type": {
+    "icon": {
+      "n": 477,
+      "accuracy": 0.6939,
+      "offset_p50": 18.61,
+      "offset_p90": 539.0
+    },
+    "text": {
+      "n": 583,
+      "accuracy": 0.9057,
+      "offset_p50": 27.89,
+      "offset_p90": 217.88
+    }
+  },
+  "by_area_bucket": {
+    "xs  (<500px²)": {
+      "n": 1,
+      "accuracy": 0.0,
+      "offset_p50": 87.43,
+      "offset_p90": 87.43
+    },
+    "s   (0.5k-2k)": {
+      "n": 43,
+      "accuracy": 0.6279,
+      "offset_p50": 8.94,
+      "offset_p90": 406.09
+    },
+    "m   (2k-8k)": {
+      "n": 222,
+      "accuracy": 0.6171,
+      "offset_p50": 14.5,
+      "offset_p90": 497.0
+    },
+    "l   (>8k)": {
+      "n": 794,
+      "accuracy": 0.8753,
+      "offset_p50": 27.5,
+      "offset_p90": 309.04
+    }
+  },
+  "parse_failures": 212
+}

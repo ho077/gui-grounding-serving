@@ -1,0 +1,58 @@
+{
+  "tag": "bf16_zero_shot",
+  "overall": {
+    "n": 198,
+    "accuracy": 0.0051,
+    "offset_p50": 1638.03,
+    "offset_p90": 3176.36
+  },
+  "by_platform": {
+    "mobile": {
+      "n": 198,
+      "accuracy": 0.0051,
+      "offset_p50": 1638.03,
+      "offset_p90": 3176.36
+    }
+  },
+  "by_instruction_type": {
+    "icon": {
+      "n": 80,
+      "accuracy": 0.0125,
+      "offset_p50": 1178.37,
+      "offset_p90": 3216.5
+    },
+    "text": {
+      "n": 118,
+      "accuracy": 0.0,
+      "offset_p50": 1797.34,
+      "offset_p90": 3147.66
+    }
+  },
+  "by_area_bucket": {
+    "xs  (<500px²)": {
+      "n": 0,
+      "accuracy": null,
+      "offset_p50": null,
+      "offset_p90": null
+    },
+    "s   (0.5k-2k)": {
+      "n": 0,
+      "accuracy": null,
+      "offset_p50": null,
+      "offset_p90": null
+    },
+    "m   (2k-8k)": {
+      "n": 19,
+      "accuracy": 0.0,
+      "offset_p50": 509.52,
+      "offset_p90": 3066.85
+    },
+    "l   (>8k)": {
+      "n": 179,
+      "accuracy": 0.0056,
+      "offset_p50": 1658.28,
+      "offset_p90": 3181.97
+    }
+  },
+  "parse_failures": 2
+}

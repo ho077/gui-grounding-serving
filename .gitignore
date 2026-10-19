@@ -14,7 +14,9 @@ saves/
 *.bin
 *.pt
 
-results/*.json
+# results/ 里的 JSON 是 README 每个数字的唯一证据，且极小（全部 < 300KB），随仓库版本化。
+# 作废的产物不删，改由 results/retracted.txt 显式排除（详见 docs/07-results.md §11）。
+# 注意：别往 results/ 里放数据集或权重。
 results/_variant_status.tsv
 logs/
 *.log

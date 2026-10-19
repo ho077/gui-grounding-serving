@@ -28,16 +28,49 @@ SMALL_KEY = "xs  (<500px²)"
 LARGE_KEY = "l   (>8k)"
 
 
+def load_retracted(d: Path) -> set:
+    """读 `results/retracted.txt`：口径错误的 tag 不进汇总表，也不参与结论推导。
+
+    为什么要有一个"作废清单"而不是删掉 JSON
+    --------------------------------------
+    测量口径出错的产物和跑砸了的实验不一样：它的数字看起来完全合理，
+    删掉就再也想不起来为什么不能用了。留一份显式清单，让脚本自动跳过、让人随时复盘。
+    """
+    p = d / "retracted.txt"
+    if not p.exists():
+        return set()
+    out = set()
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.add(line)
+    return out
+
+
 def _load_results(d: Path) -> tuple[dict, dict]:
     grounding: dict[str, dict] = {}
     bench: dict[str, dict] = {}
+    skip = load_retracted(d)
     for p in sorted(d.glob("grounding_*.json")):
         tag = p.stem[len("grounding_"):]
+        if tag in skip:
+            continue
         grounding[tag] = json.loads(p.read_text(encoding="utf-8"))
     for p in sorted(d.glob("bench_*.json")):
         tag = p.stem[len("bench_"):]
+        if tag in skip:
+            continue
         bench[tag] = json.loads(p.read_text(encoding="utf-8"))
     return grounding, bench
+
+
+def render_retracted_note(d: Path) -> str:
+    skip = load_retracted(d)
+    if not skip:
+        return ""
+    return (f"> 已按 `results/retracted.txt` 排除 {len(skip)} 个作废档位，"
+            f"它们不计入本表与结论：{', '.join('`' + t + '`' for t in sorted(skip))}。"
+            f"作废原因见 `docs/07-results.md` §11。")
 
 
 def _best_bench(bench: dict, tag: str) -> dict:
@@ -91,7 +124,9 @@ def render_conclusion(grounding: dict, bench: dict) -> str:
     if len(grounding) < 2:
         return "_当前只有单个档位的结果，跑完至少两个档位后这里会自动生成对比结论。_"
 
-    base_tag = "bf16" if "bf16" in grounding else sorted(grounding)[0]
+    # 基准要挑"未微调、未量化、原分辨率"的那一档，按字母排会挑到 awq_*
+    preferred = [t for t in grounding if "zero_shot" in t or "native" in t]
+    base_tag = preferred[0] if preferred else sorted(grounding)[0]
     base = grounding[base_tag]
     base_o = base.get("overall", {})
 
@@ -145,12 +180,13 @@ def _signed(d: Optional[float], pct: bool = False, unit: str = "") -> str:
     return f"{d:+.1f}{unit}"
 
 
-def update_readme(table: str, conclusion: str) -> bool:
+def update_readme(body: str) -> bool:
+    """把表格 + 结论回填到 README 的标记之间（分段由调用方拼好）。"""
     if not README.exists():
         return False
     text = README.read_text(encoding="utf-8")
     # 结论一并回填：手写的结论容易在重跑后忘了更新，或者只挑好看的写。
-    block = f"{START}\n\n{table}\n\n{conclusion}\n\n{END}"
+    block = f"{START}\n\n{body}\n\n{END}"
     if START in text and END in text:
         new_text = re.sub(
             re.escape(START) + r".*?" + re.escape(END),
@@ -172,16 +208,21 @@ def main() -> None:
     if not d.is_absolute():
         d = ROOT / d
     grounding, bench = _load_results(d)
+    note = render_retracted_note(d)
 
     table = render_table(grounding, bench)
     print("=== 汇总表 ===")
     print(table)
+    if note:
+        print(note)
     print()
     print("=== 选型结论 ===")
     print(render_conclusion(grounding, bench))
 
     if not args.no_write:
-        if update_readme(table, render_conclusion(grounding, bench)):
+        block = f"{table}\n\n{note}\n\n{render_conclusion(grounding, bench)}" if note \
+            else f"{table}\n\n{render_conclusion(grounding, bench)}"
+        if update_readme(block):
             print(f"\n[report] 已回填 {README}")
         else:
             print("\n[report] 未找到 README，跳过回填")

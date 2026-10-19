@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from vfs.grounding import (  # noqa: E402
     Sample, Record, EvalResult, evaluate, parse_point, _to_pixels,
     point_to_pixels, _stratified_limit, is_refusal,
+    _xywh_to_xyxy, load_screenspot,
 )
 
 # mock 服务固定返回归一化坐标 (500, 500)，即图像正中
@@ -239,6 +240,58 @@ def test_end_to_end() -> None:
     log()
 
 
+def _mini_dataset(scale: float = 1.0) -> Path:
+    """造一份最小 ScreenSpot：`xx.json` 里一条 xywh 标注 + 一张真实 PNG。
+
+    这张图故意用 2000x1000（长边 > 任何 max_side），因为那个 bug 只在
+    "原图大于 max_side、且 xywh 的 x+w 在缩放后越过边界"时才出现。
+    """
+    from PIL import Image
+    d = Path(__import__("tempfile").mkdtemp(prefix="screenspot_"))
+    (d / "images").mkdir()
+    Image.new("RGB", (2000, 1000), (255, 255, 255)).save(d / "images" / "a.png")
+    (d / "metadata").mkdir()
+    # xywh：左 1000、上 500、宽 400、高 200 —— 用原图尺寸判定必须是 xywh（1000+400 < 2000）
+    rows = [{"img_filename": "a.png", "instruction": "click",
+             "bbox": [1000 * scale, 500 * scale, 400 * scale, 200 * scale],
+             "split": "desktop", "data_type": "text"}]
+    (d / "metadata" / "screenspot_desktop.json").write_text(
+        json.dumps(rows), encoding="utf-8")
+    return d
+
+
+def test_bbox_scales_with_image() -> None:
+    """--max-side 缩图后 GT 必须同比缩放（bug #31 的回归测试）。
+
+    症状复述：判定 xywh/xyxy 时用了**缩放后**的尺寸，x+w=1400 > 新的 W=1000，
+    于是 xywh 被误读成 xyxy，整份标注作废 —— Jedi 档一度只有 11.0%。
+    """
+    log("--- 缩图后 bbox 同比缩放 ---")
+    d = _mini_dataset()
+    try:
+        full = load_screenspot(d, 0, 0)
+        check("不缩放：样本数", len(full), 1)
+        check("不缩放：xywh 被正确识别", full[0].bbox, [1000, 500, 1400, 700], tol=1e-6)
+
+        # 长边 1000 -> 图变成 1000x500，缩放系数 0.5
+        small = load_screenspot(d, 0, 1000)
+        check("缩放：图像宽高", (small[0].img_w, small[0].img_h), (1000, 500))
+        check("缩放：bbox 同比缩一半", small[0].bbox, [500, 250, 700, 350], tol=1e-6)
+        # 相对坐标必须完全不变：这是"三者同源"的可断言形式
+        r0 = [full[0].bbox[i] / (full[0].img_w if i % 2 == 0 else full[0].img_h)
+              for i in range(4)]
+        r1 = [small[0].bbox[i] / (small[0].img_w if i % 2 == 0 else small[0].img_h)
+              for i in range(4)]
+        check("相对坐标不变", max(abs(a - b) for a, b in zip(r0, r1)), 0.0, tol=1e-6)
+        # 且矩形仍然是正的 xyxy（宽高为正）
+        b = small[0].bbox
+        check("矩形仍合法", (b[2] > b[0]) and (b[3] > b[1]), True)
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+    log()
+
+
 def _dummy() -> str:
     """1x1 透明 PNG 的 base64。mock 服务不读内容，只为让 payload 合法。"""
     return ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
@@ -259,6 +312,7 @@ def main() -> None:
     test_sample_geom()
     test_aggregation()
     test_end_to_end()
+    test_bbox_scales_with_image()
     log("=" * 60)
     log("总结: " + ("全部通过" if all(results) else f"{results.count(False)} 项失败"))
     Path("_test_out.txt").write_text("\n".join(out), encoding="utf-8")

@@ -1,0 +1,21 @@
+# 已作废、不进任何结论的评测 tag（一行一个，# 开头是注释）
+#
+# 这里不是"跑砸了就删"，而是把口径错误的产物**显式标记**出来：
+# make report 会跳过它们，README 主表里也不会出现，
+# 但 results/*.json 一律保留，方便复盘（完整故事在 docs/07-results.md §11）。
+#
+# 2026-10-19 登记：三个口径错误
+#   A. 服务端降采样 + GT 未缩放 + --coord-space auto 三重污染
+bf16_base_cap
+awq_int4
+awq_int4_v2
+sft_v2_cap
+#   B. 坐标口径错位（auto 误判）时期的早期零样本
+bf16_zero_shot
+bf16_zero_shot_pixel
+#   C. Jedi 集成期的排障产物：GT 未随缩图缩放 / 协议未对齐 / 冒烟与小样本探针
+jedi_3b
+jedi_probe_px
+jedi_full_smoke
+jedi_cap14
+jedi_cap18
