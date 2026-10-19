@@ -167,6 +167,8 @@ def main() -> None:
     ap.add_argument("--num-calib", type=int, default=32)
     ap.add_argument("--train-file", default=str(TRAIN_DEFAULT))
     ap.add_argument("--calib-max-side", type=int, default=768)
+    ap.add_argument("--scheme", default="W4A16",
+                    help="量化 preset 名（llmcompressor 0.5.2 只接受 preset 名）")
     ap.add_argument("--dry-run", action="store_true",
                     help="只统计 lut：谁被保留、参数分布、位宽账本，不真量化")
     args = ap.parse_args()
@@ -298,9 +300,14 @@ def main() -> None:
 
     # device_map="cpu" 加载的，量化前挪到 GPU
     model.to("cuda:0")
-    scheme = {"W4A16_channel": {"weights": {
-        "num_bits": 4, "type": "int", "symmetric": True,
-        "strategy": "channel"}}}
+    # llmcompressor 0.5.2 起 AWQModifier 只接受 **preset 名**（字符串），
+    # 手写 {"W4A16_channel": {...}} 会直接被 pydantic 拒掉：
+    #   `scheme` must either be a preset scheme name or a dictionary of
+    #   preset scheme names
+    # 这里用 "W4A16"（group_size=128 / symmetric / int4），与已有全量化产物
+    # qwen25vl-3b-base-awq 的 config.json 完全一致 —— 混合位宽必须和 V0 基线
+    # 用同一套量化口径，否则比出来的不是"保了哪些层"，而是"换了套量化方案"。
+    scheme = args.scheme
     recipe = AWQModifier(ignore=ignore, scheme=scheme, targets=["Linear"])
     oneshot(model=model, dataset=ds, recipe=recipe, output_dir=args.out,
             max_seq_length=max_seq, num_calibration_samples=len(rows),
@@ -312,6 +319,35 @@ def main() -> None:
     import subprocess
     subprocess.run([sys.executable, str(SCRIPTS / "fix_awq_ignore.py"),
                     args.out], check=False)
+
+    # 口径自检：混合位宽的意义在于"只改动了哪些层保精度"，所以量化超参必须
+    # 和既有 V0 产物逐字段一致。不一致时下面的对比就变成两件事混在一起。
+    import json as _json
+    ref_env = os.environ.get("AWQ_BASE")
+    ref = str(ref_env) if ref_env else ""
+    try:
+        ours = _json.loads((Path(args.out) / "config.json").read_text())[
+            "quantization_config"]
+        g = list(ours.get("config_groups", {}).values())[0]
+        w = g.get("weights", {})
+        sig = dict(bits=w.get("num_bits"), sym=w.get("symmetric"),
+                   group=w.get("group_size"), strat=w.get("strategy"),
+                   act=list(g.get("input_activations", {}) or {}.keys()))
+        print(f"[口径] 本产物量化超参 = {sig}")
+        if ref and Path(ref).exists():
+            r = _json.loads((Path(ref) / "config.json").read_text())[
+                "quantization_config"]
+            rg = list(r.get("config_groups", {}).values())[0]
+            rw = rg.get("weights", {})
+            rsig = dict(bits=rw.get("num_bits"), sym=rw.get("symmetric"),
+                        group=rw.get("group_size"), strat=rw.get("strategy"),
+                        act=list(rg.get("input_activations", {}) or {}.keys()))
+            ok = sig == rsig
+            print(f"[口径] V0 基线超参     = {rsig}  →  {'一致' if ok else '**不一致**'}")
+            if not ok:
+                print("[警告] 与 V0 基线量化方案不同，本档结果不能直接与之对减！")
+    except Exception as e:  # 自检失败不该中断流程，但要看得见
+        print(f"[口径] 自检跳过：{type(e).__name__} {e}")
 
 
 if __name__ == "__main__":

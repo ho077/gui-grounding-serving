@@ -60,12 +60,37 @@ echo "[环境] TRAIN_VENV=$TRAIN_VENV"
 
 MODEL="${MODEL:-/root/models/Qwen2.5-VL-3B-Instruct}"
 AWQ_BASE="${AWQ_BASE:-/hy-tmp/models/qwen25vl-3b-base-awq}"
+# 08_mixed_precision.py 用它做"量化超参是否与 V0 一致"的自检
+export AWQ_BASE
 # configs/serve/*.yaml 里写的是 ${MODEL_DIR}/Qwen2.5-VL-3B-Instruct 这种占位，
 # serve.py 用 os.path.expandvars 展开。不 export 的话它会展开成
 # "/Qwen2.5-VL-3B-Instruct"（空变量），vLLM 直接退出且日志几乎为空。
 export MODEL_DIR="${MODEL_DIR:-$(dirname "$MODEL")}"
 OUTROOT="${OUTROOT:-/hy-tmp/models}"
 EVAL_SIDE=1264
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# 用 KiB 读显存占用，避免 MiB/GiB 单位在不同驱动上解析不一致
+gpu_used_kib() {
+  nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' '
+}
+
+# 显存可能因惰性回收而滞后报告，所以要"杀了之后的若干秒内仍 <=2GiB"才算干净
+wait_gpu_free() {
+  kill_server
+  local i=""
+  for i in $(seq 1 30); do
+    used=$(gpu_used_kib)
+    if [ "${used:-9999999}" -le 2097152 ]; then
+      echo "[显存] 已释放（${used} KiB，等待 $((i * 3))s）"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "[警告] 显存仍有 $(gpu_used_kib) KiB 未释放，继续尝试"
+  return 1
+}
 
 kill_server() {
   pkill -f "vfs.grounding" 2>/dev/null || true
@@ -93,7 +118,24 @@ run_case() {
   if [ -n "${3:-}" ]; then
     IFS=' ' read -r -a qargs <<< "$3"
   fi
+
+  # 断点续跑：同一档位的 JSON 已存在就跳过（sweep 中途失败时不用从头再来，
+  # 每档大约 25 分钟）
+  if [ -f "results/grounding_awq_${name}_full${EVAL_SIDE}.json" ]; then
+    echo "========== [$name] 已有结果，跳过 =========="
+    return 0
+  fi
+
   echo "========== [$name] $(date +%H:%M:%S) =========="
+
+  # 必须在量化**之前**清干净：llmcompressor 要把整份 BF16 载到 GPU 上跑校准，
+  # 而上一档的 vLLM 服务此时还占着 20+ GiB —— 顺序写反就会 CUDA OOM
+  # （实测：keep_attn 量化时上一档服务仍在，报 out of memory 而不是量化失败）。
+  if [ ${#qargs[@]} -gt 0 ]; then
+    wait_gpu_free
+  else
+    kill_server
+  fi
 
   if [ ${#qargs[@]} -gt 0 ]; then
     echo "[1/3] 量化 -> $dir"
@@ -132,7 +174,9 @@ run_case() {
 mkdir -p logs
 
 # BF16 基座同口径对照：没有它就算不出"4bit 真实损失"（每档都要有各自的同档基线）
-echo "========== [base_full_${EVAL_SIDE}] $(date +%H:%M:%S) =========="
+if [ -f "results/grounding_base_full_${EVAL_SIDE}.json" ]; then
+  echo "========== [base_full_${EVAL_SIDE}] 已有结果，跳过 =========="
+else
 kill_server
 setsid nohup "$SERVE_VENV" -m vfs.serve \
   --config configs/serve/bf16_base.yaml > "logs/serve_base_${EVAL_SIDE}.log" 2>&1 < /dev/null &
@@ -144,12 +188,18 @@ base_mid=$(curl -s -m 5 http://127.0.0.1:8000/v1/models \
   --model "$base_mid" --data-dir data/eval/ScreenSpot \
   --coord-space pixel --tag "base_full_${EVAL_SIDE}" \
   --max-side "$EVAL_SIDE" --concurrency 8 --timeout 180 --out-dir results
+  echo "----- [base_full_${EVAL_SIDE}] done $(date +%H:%M:%S) -----"
+fi
 
 # V0：干净的 4bit 基线（现有全量化产物，不再量化，只用来对齐口径）
 run_case v0_base "$AWQ_BASE" ""
 
 # V1：attention 保 FP16 —— 只多约 0.5GB，是本实验信息量最大的一档
 run_case keep_attn "${OUTROOT}/qwen25vl-3b-base-awq-keep-attn" "--keep attn"
+
+# V2：深层的全部 Linear 保 FP16（24-35 层）—— Pareto 曲线的第三个点。
+#     若 coord 回归主要依赖深层，这一档会比 keep_attn 挽回更多，代价约 +1.4GB。
+run_case keep_deep "${OUTROOT}/qwen25vl-3b-base-awq-keep-deep" "--keep-layers 24-35"
 
 kill_server
 echo "===== SWEEP DONE $(date +%H:%M:%S) ====="
