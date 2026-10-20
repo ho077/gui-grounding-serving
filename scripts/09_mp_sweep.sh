@@ -224,5 +224,13 @@ run_case keep_mlp "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp" "--keep mlp"
 run_case keep_mlp_down "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-down" "--keep mlp_down"
 run_case keep_mlp_gateup "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-gateup" "--keep mlp_gateup"
 
+# V6：只把量化粒度改细 —— group_size 128 -> 64，**没有任何一层保 FP16**。
+#   这是比"保 FP16"便宜得多的补救：权重仍是 4bit，只有 scale 存储翻倍
+#   （2775M 参 / 64 = 43M 个 scale，约 +0.05 GB）。
+#   12.4 节已证明损失集中在 gate_up 的**量化误差**上，若细化粒度能拿回大头，
+#   Pareto 上会多一个"3.3 GB / 接近 76%"的点，比 keep_mlp_gateup 实用得多。
+#   风险：Marlin 内核对 group_size 的支持（32/64/128）需实测确认。
+run_case g64 "${OUTROOT}/qwen25vl-3b-base-awq-g64" "--group-size 64"
+
 kill_server
 echo "===== SWEEP DONE $(date +%H:%M:%S) ====="
