@@ -206,5 +206,23 @@ run_case keep_attn "${OUTROOT}/qwen25vl-3b-base-awq-keep-attn" "--keep attn"
 #     若 coord 回归主要依赖深层，这一档会比 keep_attn 挽回更多，代价约 +1.4GB。
 run_case keep_deep "${OUTROOT}/qwen25vl-3b-base-awq-keep-deep" "--keep-layers 24-35"
 
+# V3：MLP 保 FP16、attention 仍压 4bit —— 归因矩阵的第四个格子。
+#   2x2 矩阵（attn x mlp 各自 int4/FP16）：
+#       mlp=int4, attn=int4  -> V0        67.7%（-11.9）
+#       mlp=int4, attn=FP16  -> keep_attn 70.0%（-9.7）  => attention 只值 +2.3
+#       mlp=FP16, attn=int4  -> keep_mlp  ?             <- 本档：若 ≈ V0 则损失全在 MLP
+#       mlp=FP16, attn=FP16  -> BF16      79.7%
+#   代价约 +3.4GB（≈回到 BF16 体积），纯为归因而设，不作为部署候选。
+run_case keep_mlp "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp" "--keep mlp"
+
+# V4/V5：MLP 内部再拆 —— 2x2 矩阵已经说明"12 点损失里 11 点在 MLP"，
+#   剩下的问题是这 11 点在 gate_up（1824M 参，压缩的是宽度维）还是
+#   down_proj（611M 参）。两者的 FP16 代价差 3 倍：
+#     保 down   → +0.85GB（3.2 -> 4.05GB）
+#     保 gate_up→ +2.55GB（3.2 -> 5.75GB）
+#   若"只保 down"就能拿回大头，部署 Pareto 点会好看很多。
+run_case keep_mlp_down "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-down" "--keep mlp_down"
+run_case keep_mlp_gateup "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-gateup" "--keep mlp_gateup"
+
 kill_server
 echo "===== SWEEP DONE $(date +%H:%M:%S) ====="

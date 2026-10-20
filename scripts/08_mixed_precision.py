@@ -87,7 +87,13 @@ def strip_prefix(name: str) -> str:
 
 
 def classify(name: str) -> str:
-    """把一个 Linear 的模块路径归到 attn / mlp / vision / head / other。"""
+    """把一个 Linear 的模块路径归到细粒度类别。
+
+    除了粗粒度（attn / mlp / vision / head），MLP 再拆成
+    gate_up / down —— vLLM 侧 gate_proj+up_proj 融合成 gate_up_proj，
+    两者的参数量差 3 倍（1824M vs 611M），量化敏感度未必相同，
+    部署时"只保哪一个"是不同价位。
+    """
     p = strip_prefix(name)
     parts = p.split(".")
     if parts[0] == "lm_head":
@@ -97,7 +103,10 @@ def classify(name: str) -> str:
     if "self_attn" in parts:
         return "attn"
     if "mlp" in parts:
-        return "mlp"
+        leaf = parts[-1]
+        if leaf.startswith(("gate", "up")):
+            return "mlp_gateup"
+        return "mlp_down"
     return "other"
 
 
@@ -136,7 +145,9 @@ def decide(name: str, keep_groups: set[str], keep_layers: set[int] | None
     # 后者直接决定输出的坐标词元，压它的收益远小于风险。
     if g in ("vision", "head"):
         return "keep"
-    if g in keep_groups:
+    # `mlp` 是 `mlp_gateup` + `mlp_down` 的并集：写 mlp 等价于两个细类都保
+    if g in keep_groups or (
+            g.startswith("mlp_") and "mlp" in keep_groups):
         return "keep"
     if keep_layers is not None:
         i = layer_index(name)
@@ -190,7 +201,7 @@ def main() -> None:
         raise SystemExit("没找到任何 Linear，结构可能变了，请检查 classify()")
 
     ignore: list[str] = []
-    n_keep = n_quant = p_keep = p_quant = 0
+    n_keep = n_quant = p_keep = p_quant = p_keep_llm = 0
     groups: dict[str, list[int]] = {}
     for n, m in linears:
         g = classify(n)
@@ -201,6 +212,11 @@ def main() -> None:
             n_keep += 1
             p_keep += p
             ignore.append(n)
+            # 只有本来会被量化的（LLM 主干内的）模块才谈得上"多花钱"：
+            # 视觉塔 + lm_head 无论哪档都是 FP16，把它们算进增量为虚增（实测
+            # keep_attn 磁盘增量 3.7-3.2=0.5GB，而按 p_keep 全会算成 1.84GB）
+            if g in ("attn", "mlp"):
+                p_keep_llm += p
         else:
             n_quant += 1
             p_quant += p
@@ -220,7 +236,8 @@ def main() -> None:
           f"量化 {n_quant} 个 / {p_quant/1e6:.0f}M 参")
     print(f"[位宽] LLM 权重 ≈ {gb(p_quant,4)+gb(p_keep,16):.2f} GB"
           f"（全 FP16 需 {gb(p_quant+p_keep,16):.2f} GB）"
-          f" → 相对全量化多花 {gb(p_keep,16)-gb(p_keep,4):.2f} GB")
+          f" → 相对全量化多花 {gb(p_keep_llm,16)-gb(p_keep_llm,4):.2f} GB"
+          f"（主干内保留 {p_keep_llm/1e6:.0f}M 参）")
 
     profile = {
         "tag": args.tag or Path(args.out).name,
