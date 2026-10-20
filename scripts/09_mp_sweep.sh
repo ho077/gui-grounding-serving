@@ -232,5 +232,17 @@ run_case keep_mlp_gateup "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-gateup" "--ke
 #   风险：Marlin 内核对 group_size 的支持（32/64/128）需实测确认。
 run_case g64 "${OUTROOT}/qwen25vl-3b-base-awq-g64" "--group-size 64"
 
+# V7/V8：把 α 搜索补细后再试细粒度 —— 12.7 节的负结果怀疑是搜索收敛错了。
+#   llmcompressor 的 AWQModifier._compute_best_scale 用 `n_grid=20` +
+#   `for ratio in range(n_grid)`，于是 ratio 只覆盖 {0, 0.05, ..., 0.95}，
+#   **ratio=1.0（纯激活驱动缩放）永远不被试**，duo_scaling 下 0.05 步长也偏粗。
+#   --alpha-grid 40 把网格改成 0~1.0 共 41 个点（步长 0.025），
+#   其余（校准集、ignore、量化超参）与 g64 完全一致 —— 单一变量。
+#   注意搜索本身是量化网格感知的（_pseudo_quantize_tensor 带 group_size），
+#   所以这一档是在 g64 网格上重搜 α，正是"联合搜索"缺的那一步。
+run_case g64_fine "${OUTROOT}/qwen25vl-3b-base-awq-g64-fine" "--group-size 64 --alpha-grid 40"
+# V8：同样补细的网格，试更细的粒度 32（Marlin 支持），看曲线往哪边走
+run_case g32_fine "${OUTROOT}/qwen25vl-3b-base-awq-g32-fine" "--group-size 32 --alpha-grid 40"
+
 kill_server
 echo "===== SWEEP DONE $(date +%H:%M:%S) ====="

@@ -164,6 +164,43 @@ def sizeof_module(m) -> int:
     return n
 
 
+def _patch_alpha_grid(n_grid: int) -> None:
+    """把 AWQModifier._compute_best_scale 的 α 搜索网格改细，并补上 ratio=1.0。
+
+    为什么要打这个补丁：原实现是
+        n_grid = 20
+        for ratio in range(n_grid):
+            ratio = ratio / n_grid
+    ratio 因此只覆盖 {0, 0.05, ..., 0.95}，**1.0 永远不被试**（纯激活驱动的
+    缩放被排除），且 duo_scaling 下 0.05 的步长可能太粗。12.7 节发现
+    "g64 权重误差更小但任务更差"，怀疑就是搜索在这个网格上收敛到了错的解 ——
+    所以要给搜索一个更细、含端点的网格重搜。
+
+    做法是源码级替换那两行后 exec 回 llmcompressor 的模块命名空间，
+    逻辑其余部分逐字不变（不重写算法，避免引入差异）。
+    """
+    import inspect
+    import textwrap
+
+    from llmcompressor.modifiers.awq.base import AWQModifier
+
+    src = textwrap.dedent(inspect.getsource(AWQModifier._compute_best_scale))
+    new = src.replace("n_grid = 20", f"n_grid = {n_grid}")
+    new = new.replace("for ratio in range(n_grid):",
+                      "for ratio in range(n_grid + 1):")
+    if new == src:
+        raise SystemExit(
+            "α 网格补丁没打上：llmcompressor 源码可能已变化，请检查 "
+            "AWQModifier._compute_best_scale 里的 n_grid / range 两行")
+
+    import llmcompressor.modifiers.awq.base as awq_base
+    ns = dict(vars(awq_base))
+    exec(compile(new, "<patched_awq>", "exec"), ns)
+    AWQModifier._compute_best_scale = ns["_compute_best_scale"]
+    print(f"[α 网格] n_grid 20 -> {n_grid}，ratio 覆盖 0~1.0（含端点，"
+          f"步长 {1.0 / n_grid:.4f}）")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="LLM 主干混合位宽消融")
     ap.add_argument("--model",
@@ -185,7 +222,14 @@ def main() -> None:
                          "通用入口（仍为 AWQ，仅改粒度）")
     ap.add_argument("--dry-run", action="store_true",
                     help="只统计 lut：谁被保留、参数分布、位宽账本，不真量化")
+    ap.add_argument("--alpha-grid", type=int, default=0,
+                    help="AWQ α 搜索的网格点数；0=llmcompressor 默认（n_grid=20，"
+                         "且 `range(20)` 使 ratio=1.0 永不被试）。>0 时改成 "
+                         "range(N+1)，ratio 覆盖 0~1.0 共 N+1 个点")
     args = ap.parse_args()
+
+    if args.alpha_grid > 0:
+        _patch_alpha_grid(args.alpha_grid)
 
     import torch
     from transformers import AutoModelForImageTextToText
@@ -218,7 +262,7 @@ def main() -> None:
             # 只有本来会被量化的（LLM 主干内的）模块才谈得上"多花钱"：
             # 视觉塔 + lm_head 无论哪档都是 FP16，把它们算进增量为虚增（实测
             # keep_attn 磁盘增量 3.7-3.2=0.5GB，而按 p_keep 全会算成 1.84GB）
-            if g in ("attn", "mlp"):
+            if g in ("attn", "mlp_gateup", "mlp_down"):
                 p_keep_llm += p
         else:
             n_quant += 1
@@ -228,12 +272,15 @@ def main() -> None:
     ignore = ignore + [strip_prefix(n) for n in ignore]
 
     gb = lambda nparams, nbits: nparams * nbits / 8 / 1024 ** 3
-    llm_p = sum(groups.get("attn", [])) + sum(groups.get("mlp", []))
+    mlp_p = sum(groups.get("mlp_gateup", [])) + sum(groups.get("mlp_down", []))
+    llm_p = sum(groups.get("attn", [])) + mlp_p
     all_p = sum(sum(v) for v in groups.values())
     print(f"[结构] Linear 共 {len(linears)} 个 / {all_p/1e6:.0f}M 参；"
           f"其中 LLM 主干 {llm_p/1e6:.0f}M"
           f"（attn {sum(groups.get('attn',[]))/1e6:.0f}M, "
-          f"mlp {sum(groups.get('mlp',[]))/1e6:.0f}M），"
+          f"mlp {mlp_p/1e6:.0f}M"
+          f"（gate_up {sum(groups.get('mlp_gateup',[]))/1e6:.0f}M / "
+          f"down {sum(groups.get('mlp_down',[]))/1e6:.0f}M）），"
           f"视觉塔+head {sum(groups.get('vision',[])+groups.get('head',[]))/1e6:.0f}M")
     print(f"[档位] 保留 {n_keep} 个 Linear / {p_keep/1e6:.0f}M 参；"
           f"量化 {n_quant} 个 / {p_quant/1e6:.0f}M 参")
