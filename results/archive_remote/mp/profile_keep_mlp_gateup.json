@@ -1,0 +1,22 @@
+{
+  "tag": "keep_mlp_gateup",
+  "out": "/hy-tmp/models/qwen25vl-3b-base-awq-keep-mlp-gateup",
+  "keep_groups": [
+    "mlp_gateup"
+  ],
+  "keep_layers": null,
+  "n_linear_total": 415,
+  "n_keep": 235,
+  "n_quant": 180,
+  "params_keep": 2601456384,
+  "params_quant": 1151428608,
+  "params_by_group": {
+    "vision": 667095808,
+    "attn": 339830784,
+    "mlp_gateup": 1623195648,
+    "mlp_down": 811597824,
+    "head": 311164928
+  },
+  "llm_weight_gb": 5.382,
+  "llm_weight_gb_fp16": 6.99
+}

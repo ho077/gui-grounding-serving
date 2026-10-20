@@ -1,0 +1,21 @@
+{
+  "tag": "keep_attn",
+  "out": "/hy-tmp/models/qwen25vl-3b-base-awq-keep-attn",
+  "keep_groups": [
+    "attn"
+  ],
+  "keep_layers": null,
+  "n_linear_total": 415,
+  "n_keep": 307,
+  "n_quant": 108,
+  "params_keep": 1318091520,
+  "params_quant": 2434793472,
+  "params_by_group": {
+    "vision": 667095808,
+    "attn": 339830784,
+    "mlp": 2434793472,
+    "head": 311164928
+  },
+  "llm_weight_gb": 3.589,
+  "llm_weight_gb_fp16": 6.99
+}

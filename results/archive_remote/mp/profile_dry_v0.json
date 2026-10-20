@@ -1,0 +1,19 @@
+{
+  "tag": "dry_v0",
+  "out": "/tmp/dry_v0",
+  "keep_groups": [],
+  "keep_layers": null,
+  "n_linear_total": 415,
+  "n_keep": 163,
+  "n_quant": 252,
+  "params_keep": 978260736,
+  "params_quant": 2774624256,
+  "params_by_group": {
+    "vision": 667095808,
+    "attn": 339830784,
+    "mlp": 2434793472,
+    "head": 311164928
+  },
+  "llm_weight_gb": 3.114,
+  "llm_weight_gb_fp16": 6.99
+}

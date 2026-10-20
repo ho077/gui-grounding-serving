@@ -1,0 +1,42 @@
+{
+  "config": {
+    "model": "qwen25vl-3b-base-awq",
+    "base_url": "http://127.0.0.1:8000",
+    "num_requests": 128,
+    "concurrency": 32,
+    "request_rate": null,
+    "max_tokens": 32,
+    "image_size": 1408,
+    "images_per_request": 1,
+    "num_warmup": 4,
+    "seed": 42
+  },
+  "summary": {
+    "duration_s": 73.472,
+    "completed_requests": 128,
+    "failed_requests": 0,
+    "total_output_tokens": 3763,
+    "request_throughput_req_per_s": 1.742,
+    "output_token_throughput_tok_per_s": 51.22,
+    "mean_latency_ms": 17760.45,
+    "ttft_ms": {
+      "mean": 7821.48,
+      "p50": 7247.71,
+      "p95": 15146.82,
+      "p99": 17773.44
+    },
+    "tpot_ms": {
+      "mean": 352.78,
+      "p50": 375.29,
+      "p99": 440.87
+    },
+    "itl_ms": {
+      "mean": 346.46,
+      "p99": 545.08
+    },
+    "peak_vram_gib": 21.604,
+    "vram_baseline_gib": 21.604,
+    "vram_total_gib": 24.0,
+    "vram_note": "峰值显存 21.60 GiB（净增 0.00 GiB，显存总量 24.00 GiB，采样 1546 次）"
+  }
+}

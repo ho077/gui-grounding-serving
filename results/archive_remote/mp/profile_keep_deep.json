@@ -1,0 +1,32 @@
+{
+  "tag": "keep_deep",
+  "out": "/hy-tmp/models/qwen25vl-3b-base-awq-keep-deep",
+  "keep_groups": [],
+  "keep_layers": [
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+  ],
+  "n_linear_total": 415,
+  "n_keep": 247,
+  "n_quant": 168,
+  "params_keep": 1903135488,
+  "params_quant": 1849749504,
+  "params_by_group": {
+    "vision": 667095808,
+    "attn": 339830784,
+    "mlp": 2434793472,
+    "head": 311164928
+  },
+  "llm_weight_gb": 4.406,
+  "llm_weight_gb_fp16": 6.99
+}

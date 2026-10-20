@@ -1,0 +1,20 @@
+{
+  "tag": "g64_fine",
+  "out": "/hy-tmp/models/qwen25vl-3b-base-awq-g64-fine",
+  "keep_groups": [],
+  "keep_layers": null,
+  "n_linear_total": 415,
+  "n_keep": 163,
+  "n_quant": 252,
+  "params_keep": 978260736,
+  "params_quant": 2774624256,
+  "params_by_group": {
+    "vision": 667095808,
+    "attn": 339830784,
+    "mlp_gateup": 1623195648,
+    "mlp_down": 811597824,
+    "head": 311164928
+  },
+  "llm_weight_gb": 3.114,
+  "llm_weight_gb_fp16": 6.99
+}

@@ -92,4 +92,7 @@ probe_min keep_mlp        "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp"         awq
 # 两个负收益档也量一下，Pareto 曲线才完整（它们的问题不是显存，是精度）
 probe_min keep_mlp_down   "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-down"    awq
 probe_min keep_deep       "${OUTROOT}/qwen25vl-3b-base-awq-keep-deep"        awq
+# 粒度档：g32 是同体积下精度最好的工作点，g64 是深坑
+probe_min g32_fine        "${OUTROOT}/qwen25vl-3b-base-awq-g32-fine"         awq
+probe_min g64             "${OUTROOT}/qwen25vl-3b-base-awq-g64"              awq
 echo "===== MINVRAM DONE $(date +%H:%M:%S) ====="
