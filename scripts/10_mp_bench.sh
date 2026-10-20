@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 混合位宽 Pareto 的运行时一侧：每档起服务 -> 采样显存峰值 -> 压测 -> 关服务。
+# 混合位宽 Pareto 的运行时一侧：每档起服务 -> 压测 -> 采样显存 -> 关服务。
 #
 # 精度那一半见 scripts/09_mp_sweep.sh；这里补的是"部署时真正花的显存和吞吐"。
 # 权重体积只是下界，运行时还要算 KV cache、激活、以及 vLLM 的显存池预留
 # （gpu_memory_utilization），所以两者都列出来才有意义。
 #
 # 口径与 09_mp_sweep.sh 对齐：同一份 BF16 校准集、同一套 W4A16 量化超参。
+# 断点续跑：某档 bench JSON 已存在就跳过。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,10 +47,10 @@ wait_ready() {
   echo "[超时] 服务没起来"; return 1
 }
 
-# $1=name  $2=model_dir  $3=yaml
+# $1=name  $2=model_dir  $3=yaml(bf16|awq)
 bench_case() {
   local name="$1" dir="$2" yaml="$3"
-  if [ -f "results/bench_mp_${name}.json" ]; then
+  if [ -f "results/bench_mp_${name}_c4.json" ]; then
     echo "========== [$name] 已有压测结果，跳过 =========="
     return 0
   fi
@@ -83,10 +84,18 @@ bench_case() {
 
 mkdir -p logs
 
-bench_case bf16            "$MODEL"                             bf16
-bench_case v0              "$AWQ_BASE"                          awq
+bench_case bf16            "$MODEL"                                     bf16
+bench_case v0              "$AWQ_BASE"                                  awq
 bench_case keep_attn       "${OUTROOT}/qwen25vl-3b-base-awq-keep-attn"        awq
 bench_case keep_mlp_gateup "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-gateup"  awq
 bench_case keep_mlp        "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp"         awq
+
+# 粒度三档也压一遍：group_size 越细，每步要读的 scale 越多（128->32 是 4 倍），
+# 看 TPOT 会不会被 scale 访存拖慢（W4A16 本来就是访存瓶颈）
+bench_case g64            "${OUTROOT}/qwen25vl-3b-base-awq-g64"              awq
+bench_case g32_fine       "${OUTROOT}/qwen25vl-3b-base-awq-g32-fine"         awq
+# 两个负收益档也压上，运行时那一列才完整
+bench_case keep_mlp_down  "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-down"    awq
+bench_case keep_deep      "${OUTROOT}/qwen25vl-3b-base-awq-keep-deep"        awq
 
 echo "===== BENCH DONE $(date +%H:%M:%S) ====="

@@ -12,31 +12,31 @@
     "seed": 42
   },
   "summary": {
-    "duration_s": 59.016,
+    "duration_s": 55.432,
     "completed_requests": 64,
     "failed_requests": 0,
-    "total_output_tokens": 1829,
-    "request_throughput_req_per_s": 1.084,
-    "output_token_throughput_tok_per_s": 30.99,
-    "mean_latency_ms": 3674.31,
+    "total_output_tokens": 1827,
+    "request_throughput_req_per_s": 1.155,
+    "output_token_throughput_tok_per_s": 32.96,
+    "mean_latency_ms": 3447.29,
     "ttft_ms": {
-      "mean": 914.12,
-      "p50": 690.62,
-      "p95": 1535.94,
-      "p99": 1883.53
+      "mean": 860.58,
+      "p50": 649.21,
+      "p95": 1724.1,
+      "p99": 2024.45
     },
     "tpot_ms": {
-      "mean": 100.73,
-      "p50": 103.3,
-      "p99": 164.12
+      "mean": 96.18,
+      "p50": 91.97,
+      "p99": 173.36
     },
     "itl_ms": {
-      "mean": 99.19,
-      "p99": 504.69
+      "mean": 92.64,
+      "p99": 496.17
     },
     "peak_vram_gib": 21.627,
     "vram_baseline_gib": 21.625,
     "vram_total_gib": 24.0,
-    "vram_note": "峰值显存 21.63 GiB（净增 0.00 GiB，显存总量 24.00 GiB，采样 1385 次）"
+    "vram_note": "峰值显存 21.63 GiB（净增 0.00 GiB，显存总量 24.00 GiB，采样 1313 次）"
   }
 }
