@@ -35,6 +35,10 @@ kill_server() {
 # $1=name  $2=model_dir  $3=yaml(bf16|awq)
 probe_min() {
   local name="$1" dir="$2" yaml="$3"
+  if [ -f "results/minvram_${name}.txt" ]; then
+    echo "========== [$name] 已有结果：$(cat results/minvram_${name}.txt) =========="
+    return 0
+  fi
   echo "========== [$name] 最低显存预算 =========="
   local best=""
   for u in $STEPS; do
@@ -75,6 +79,7 @@ probe_min() {
     echo "  [$name] 在 $STEPS 范围内都起不来"
   fi
   echo "[$name] min_util=$best"
+  echo "$best" > "results/minvram_${name}.txt"
   kill_server
 }
 
@@ -84,4 +89,7 @@ probe_min v0              "$AWQ_BASE"                                  awq
 probe_min keep_attn       "${OUTROOT}/qwen25vl-3b-base-awq-keep-attn"        awq
 probe_min keep_mlp_gateup "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-gateup"  awq
 probe_min keep_mlp        "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp"         awq
+# 两个负收益档也量一下，Pareto 曲线才完整（它们的问题不是显存，是精度）
+probe_min keep_mlp_down   "${OUTROOT}/qwen25vl-3b-base-awq-keep-mlp-down"    awq
+probe_min keep_deep       "${OUTROOT}/qwen25vl-3b-base-awq-keep-deep"        awq
 echo "===== MINVRAM DONE $(date +%H:%M:%S) ====="
