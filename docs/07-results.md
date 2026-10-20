@@ -1112,3 +1112,35 @@ g64 在**每一个**探针上误差都更小 —— 量化本身是按理论走�
 - **8bit 混合**：gate_up 走 W8A16、其余 W4A16，是比"FP16/int4 二选一"更平滑的路径，
   但需先确认 vLLM 0.8.5 在 Ampere 上支持 compressed-tensors 的 W8A16 内核。
 - 只在 ScreenSpot（1272 条）上验证过，迁移到其他 grounding 基准前需重新测。
+
+---
+
+## 13. 相关工作与我们的差异化（2026-10-21 核查）
+
+**Das et al., "Towards Understanding Best Practices for Quantization of
+Vision-Language Models", arXiv 2601.15287（2026-01，UMD），代码 `gautomdas/mmq`**
+已经做过 VLM 量化敏感度的系统研究，结论包括：
+- ViT 与 LLM 的重要性可比（不随参数量线性变化）；VQA 上 LLM 最敏感
+- **组件间是非可加的**：同时量化多个组件比单独量化更差
+- 量化方法会重排重要性：AWQ 把重要性集中到 LLM，GPTQ 分布更均匀
+- 他们扫了"bit width × 组件 × block group × layer type"的网格
+
+⇒ **所以"研究 VLM 量化敏感度"这个立意本身不能算我们的创新**，面试里被问到
+相关工作时要能主动说出这篇。我们的差异化在四个更细的维度上：
+
+| 维度 | Das et al. 2026 | 本项目 |
+|---|---|---|
+| 模型 | BLIP-2 / LLaVA | **Qwen2.5-VL-3B**（2025 年的原生多模态架构） |
+| 任务 | captioning / retrieval / VQA | **像素级坐标回归（GUI grounding）** |
+| 归因粒度 | 组件级（vision / LLM / connector），提到 layer type | **LLM 内部模块级：attn / mlp_gateup / mlp_down**，并给出 2×2 归因矩阵 |
+| 粒度参数 | 未涉及 group_size | **发现 group_size 的非单调性（64 是局部深坑）**，且排除内核/搜索/校准三种解释 |
+| 方法纪律 | — | 解量化对照隔离内核因素；权重误差 ≠ 任务精度的反例 |
+
+**可以写进简历的表述**："在既有 VLM 组件级量化研究（Das et al., 2026）的基础上，
+把归因粒度推进到 LLM 内部的模块级，并在像素级定位任务上发现量化损失的位置依赖性
+（gate_up 承载 8.7/11.9 点，而按参数量看更'便宜'的 down_proj 保 FP16 是负收益）。"
+
+**不能写的表述**：
+- ❌ "首次研究 VLM 量化敏感度"（已被占）
+- ❌ "g32 显著优于 g128"（p=0.434，未达显著；只能写"同体积下更优、且显著优于 g64"）
+- ❌ "量化加速 X 倍"（吞吐九档打平）
